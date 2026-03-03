@@ -1,0 +1,57 @@
+# ── Entorno virtual ─────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Base de datos local (NUNCA al repo) ─────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+winiw.db
+winiw_backup.db
+
+# ── Variables de entorno y secrets (NUNCA al repo) ───────────────────────────
+.env
+.streamlit/secrets.toml
+.streamlit/
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+logs/
+*.log
+
+# ── Python cache ─────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.pyi
+
+# ── Distribución ─────────────────────────────────────────────────────────────
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# ── IDEs ─────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# ── Sistema operativo ────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ── Archivos temporales de exportación ───────────────────────────────────────
+exports/
+*.xlsx
+*.csv
+!requirements.txt
