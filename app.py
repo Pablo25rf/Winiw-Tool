@@ -1446,12 +1446,13 @@ if tab_dsp:
                 station = parsed['station']
                 centro  = meta['centro']
                 semana  = meta['semana']
+                year    = meta.get('year', datetime.now().year)
 
                 tier_color = {'Fantastic': '🟢', 'Great': '🔵', 'Fair': '🟡', 'Poor': '🔴'}
                 overall_icon = tier_color.get(station.get('overall_standing', ''), '⚪')
 
                 with st.expander(
-                    f"{overall_icon} {centro} — {semana} | Score: {station.get('overall_score')} "
+                    f"{overall_icon} {centro} — {semana}/{year} | Score: {station.get('overall_score')} "
                     f"({station.get('overall_standing')}) | Rank: #{station.get('rank_station')}",
                     expanded=True
                 ):
@@ -1487,7 +1488,7 @@ if tab_dsp:
                     if parsed['errors']:
                         st.warning(f"⚠️ Campos no encontrados: {', '.join(parsed['errors'])}")
 
-                    if st.button(f"💾 Guardar {centro} {semana}", key=f"save_dsp_{centro}_{semana}",
+                    if st.button(f"💾 Guardar {centro} {semana}/{year}", key=f"save_dsp_{centro}_{semana}",
                                  type="primary", use_container_width=True):
                         with st.spinner("Guardando..."):
                             try:
