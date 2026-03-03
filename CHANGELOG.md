@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.9.0] - 2026-03-03
+
+### Changed — Rendimiento y arquitectura (app.py)
+
+- **`_clear_all_caches()`** — función centralizada que reemplaza 5 bloques de 7-8 líneas `.clear()` duplicadas; 30+ líneas → 6 llamadas únicas
+- **Helpers a nivel módulo** — `_score_color`, `_fmt_pct`, `_fmt_num`, `_diff_badge`, `_metric_row`, `_get_mini_trend`, `_is_still_locked` movidas fuera de condicionales donde se redefinían en cada render
+- **`_render_pagination()`** — función única para paginación; 3 implementaciones duplicadas colapsadas en 3 llamadas
+- **`_mini_trend_map`** — dict precalculado fuera del loop de conductores; `_get_mini_trend()` se llama O(n) una vez en vez de O(n) por conductor en pantalla
+- **`iterrows()` → `itertuples()`** en 5 loops: `df_exec` (×2), `df_users`, `df_still_locked`, `df_jts` (4–10× más rápido)
+- **`SCORE_FANTASTIC/GREAT/FAIR`** — constantes de módulo para umbrales de score; `>= 90/80/60` hardcodeados en 7 sitios → 0
+
+### Changed — UX
+
+- **Tab PDF DSP Scorecard** rediseñado: parseo único de todos los PDFs → tabla resumen → un solo botón "💾 Guardar N PDFs"; expanders cerrados por defecto; caché de sesión evita reparsear si no cambian los archivos
+- **Filtros de calificación** reemplazados: 5 botones manuales con `st.session_state` + `st.rerun()` → `st.radio(horizontal=True)`; sin reruns forzados, sin acumulación de claves en session_state
+- **Año en título PDF** — el scorecard DSP muestra `DMA3 — W14/2026` en lugar de solo `DMA3 — W14`
+
+### Fixed
+
+- Claves `cal_filter_X_Y`, `page_X_Y`, `{fk}_prev` acumulándose en session_state indefinidamente → eliminadas al migrar a `st.radio`
+- `st.rerun()` redundante en 5 botones de filtro de calificación eliminado
+
+### Added
+
+- `MANUAL_OPERACION_DETALLADO.md` — manual completo de 365 líneas (el archivo anterior era un error HTTP)
+
+---
+
 ## [3.8.0] - 2026-03-02
 
 ### Fixed

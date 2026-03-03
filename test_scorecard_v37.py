@@ -13,7 +13,7 @@ import pandas as pd
 import numpy as np
 
 os.environ.setdefault("WINIW_ADMIN_USER", "test_admin")
-os.environ.setdefault("WINIW_ADMIN_PASS", "test_pass_seguro_123")
+os.environ.setdefault("WINIW_ADMIN_PASS", "Test_Pass_Seguro_2024!")
 
 import amazon_scorecard_ultra_robust_v3_FINAL as sc
 
@@ -645,6 +645,215 @@ class TestValidateDataframe(unittest.TestCase):
 
     def test_none_df(self):
         self.assertFalse(self._ok(sc.validate_dataframe(None, ["A"], "test")))
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 18. save_to_database / delete_scorecard_batch
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSaveToDatabase(unittest.TestCase):
+
+    def setUp(self):
+        self.db, self.conn, self.tmp = make_db()
+
+    def tearDown(self):
+        teardown_db(self.conn, self.tmp)
+
+    def _df(self, n=2):
+        rows = []
+        for i in range(n):
+            rows.append({
+                'ID': f'DA{i:03d}', 'Nombre': f'Driver {i}',
+                'CALIFICACION': '🥇 GREAT', 'SCORE': 85.0,
+                'Entregados': 100, 'DNR': 0, 'FS_Count': 0,
+                'DNR_RISK_EVENTS': 0, 'DCR': 0.996, 'POD': 0.995,
+                'CC': 0.995, 'FDPS': 0.99, 'RTS': 0.005, 'CDF': 0.97,
+                'DETALLES': 'OK',
+            })
+        return pd.DataFrame(rows)
+
+    def test_save_returns_true(self):
+        self.assertTrue(sc.save_to_database(self._df(), 'W07', 'DIC1', self.db))
+
+    def test_save_persists_rows(self):
+        sc.save_to_database(self._df(3), 'W07', 'DIC1', self.db)
+        cur = self.conn.execute("SELECT COUNT(*) FROM scorecards WHERE centro='DIC1' AND semana='W07'")
+        self.assertEqual(cur.fetchone()[0], 3)
+
+    def test_save_normalises_week(self):
+        """W7 debe normalizarse a W07."""
+        sc.save_to_database(self._df(1), 'W7', 'DIC1', self.db)
+        cur = self.conn.execute("SELECT DISTINCT semana FROM scorecards WHERE centro='DIC1'")
+        self.assertEqual(cur.fetchone()[0], 'W07')
+
+    def test_save_clean_first_replaces(self):
+        """Segunda llamada con clean_first=True reemplaza, no duplica."""
+        sc.save_to_database(self._df(2), 'W07', 'DIC1', self.db)
+        sc.save_to_database(self._df(2), 'W07', 'DIC1', self.db, clean_first=True)
+        cur = self.conn.execute("SELECT COUNT(*) FROM scorecards WHERE centro='DIC1' AND semana='W07'")
+        self.assertEqual(cur.fetchone()[0], 2)
+
+    def test_save_empty_df_no_rows_inserted(self):
+        """DataFrame vacio no inserta filas (aunque devuelva True)."""
+        sc.save_to_database(pd.DataFrame(), 'W07', 'DIC1', self.db)
+        cur = self.conn.execute("SELECT COUNT(*) FROM scorecards WHERE semana='W07'")
+        self.assertEqual(cur.fetchone()[0], 0)
+
+    def test_delete_batch_removes_rows(self):
+        sc.save_to_database(self._df(2), 'W08', 'DIC1', self.db)
+        sc.delete_scorecard_batch('W08', 'DIC1', self.db)
+        cur = self.conn.execute("SELECT COUNT(*) FROM scorecards WHERE semana='W08'")
+        self.assertEqual(cur.fetchone()[0], 0)
+
+    def test_delete_nonexistent_batch_ok(self):
+        """Borrar un lote que no existe no debe lanzar excepcion."""
+        self.assertTrue(sc.delete_scorecard_batch('W99', 'ZZZ', self.db))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 19. save_station_scorecard / get_station_scorecards
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestStationScorecard(unittest.TestCase):
+
+    def setUp(self):
+        self.db, self.conn, self.tmp = make_db()
+
+    def tearDown(self):
+        teardown_db(self.conn, self.tmp)
+
+    def _station(self, score=88, standing='GREAT'):
+        return {
+            'overall_score': score, 'overall_standing': standing,
+            'rank_station': 3, 'rank_wow': -1,
+            'whc_pct': 95.0, 'whc_tier': 'Great',
+            'dcr_pct': 99.6, 'dcr_tier': 'Fantastic',
+            'dnr_dpmo': 120, 'dnr_tier': 'Great',
+            'lor_dpmo': 80, 'lor_tier': 'Fantastic',
+            'fico': 92, 'fico_tier': 'Fantastic',
+            'pod_pct': 99.2, 'pod_tier': 'Great',
+            'focus_area_1': 'DNR', 'focus_area_2': 'DCR', 'focus_area_3': None,
+        }
+
+    def test_save_returns_true(self):
+        self.assertTrue(sc.save_station_scorecard(self._station(), 'W07', 'DIC1', self.db))
+
+    def test_get_returns_dataframe(self):
+        sc.save_station_scorecard(self._station(), 'W07', 'DIC1', self.db)
+        df = sc.get_station_scorecards(self.db)
+        self.assertIsInstance(df, pd.DataFrame)
+        self.assertEqual(len(df), 1)
+
+    def test_get_contains_correct_score(self):
+        sc.save_station_scorecard(self._station(score=92, standing='FANTASTIC'), 'W07', 'DIC1', self.db)
+        df = sc.get_station_scorecards(self.db)
+        self.assertEqual(df.iloc[0]['overall_score'], 92)
+
+    def test_get_empty_db_returns_empty_df(self):
+        df = sc.get_station_scorecards(self.db)
+        self.assertIsInstance(df, pd.DataFrame)
+        self.assertEqual(len(df), 0)
+
+    def test_upsert_same_week_replaces(self):
+        """Guardar dos veces la misma semana/centro debe actualizar, no duplicar."""
+        sc.save_station_scorecard(self._station(score=80), 'W07', 'DIC1', self.db)
+        sc.save_station_scorecard(self._station(score=90), 'W07', 'DIC1', self.db)
+        df = sc.get_station_scorecards(self.db)
+        self.assertEqual(len(df), 1)
+        self.assertEqual(df.iloc[0]['overall_score'], 90)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 20. save_wh_exceptions / update_drivers_from_pdf
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestPdfDataFunctions(unittest.TestCase):
+
+    def setUp(self):
+        self.db, self.conn, self.tmp = make_db()
+
+    def tearDown(self):
+        teardown_db(self.conn, self.tmp)
+
+    def test_save_wh_empty_ok(self):
+        df = pd.DataFrame(columns=['driver_id', 'driver_name', 'hours_worked', 'threshold'])
+        self.assertTrue(sc.save_wh_exceptions(df, 'W07', 'DIC1', self.db))
+
+    def test_update_drivers_empty_df(self):
+        n_upd, n_miss = sc.update_drivers_from_pdf(pd.DataFrame(), 'W07', 'DIC1', self.db)
+        self.assertEqual(n_upd, 0)
+        self.assertEqual(n_miss, 0)
+
+    def test_update_drivers_no_match(self):
+        """Si no hay conductores en BD, todos son n_miss."""
+        drivers = pd.DataFrame([{'driver_id': 'DA999', 'driver_name': 'Ghost Driver',
+                                  'dcr_pdf': 0.996, 'pod_pdf': 0.99}])
+        n_upd, n_miss = sc.update_drivers_from_pdf(drivers, 'W07', 'DIC1', self.db)
+        self.assertEqual(n_upd, 0)
+        self.assertEqual(n_miss, 1)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 21. clean_database_duplicates / run_maintenance
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestMaintenance(unittest.TestCase):
+
+    def setUp(self):
+        self.db, self.conn, self.tmp = make_db()
+
+    def tearDown(self):
+        teardown_db(self.conn, self.tmp)
+
+    def test_clean_duplicates_empty_db(self):
+        ok, n = sc.clean_database_duplicates(self.db)
+        self.assertTrue(ok)
+        self.assertEqual(n, 0)
+
+    def test_run_maintenance_empty_db(self):
+        ok, n = sc.run_maintenance(self.db)
+        self.assertTrue(ok)
+        self.assertGreaterEqual(n, 0)
+
+    def test_run_maintenance_returns_tuple(self):
+        result = sc.run_maintenance(self.db)
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 2)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 22. parse_dsp_scorecard_pdf — sin PDF real (fallback sin pdfplumber)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestParseDspScorecardPdf(unittest.TestCase):
+
+    def test_invalid_bytes_returns_not_ok(self):
+        """Bytes aleatorios devuelven ok=False sin lanzar excepcion."""
+        result = sc.parse_dsp_scorecard_pdf(b"not a pdf")
+        self.assertIsInstance(result, dict)
+        self.assertIn('ok', result)
+        self.assertIn('errors', result)
+        self.assertIn('meta', result)
+        self.assertIn('station', result)
+        self.assertIn('drivers', result)
+        self.assertIn('wh', result)
+
+    def test_empty_bytes_returns_not_ok(self):
+        result = sc.parse_dsp_scorecard_pdf(b"")
+        self.assertFalse(result['ok'])
+
+    def test_drivers_is_dataframe(self):
+        result = sc.parse_dsp_scorecard_pdf(b"not a pdf")
+        self.assertIsInstance(result['drivers'], pd.DataFrame)
+
+    def test_wh_is_dataframe(self):
+        result = sc.parse_dsp_scorecard_pdf(b"not a pdf")
+        self.assertIsInstance(result['wh'], pd.DataFrame)
+
+    def test_errors_is_list(self):
+        result = sc.parse_dsp_scorecard_pdf(b"not a pdf")
+        self.assertIsInstance(result['errors'], list)
 
 
 if __name__ == "__main__":

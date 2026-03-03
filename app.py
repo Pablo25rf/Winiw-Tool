@@ -472,6 +472,191 @@ def db_config_key(db_config: dict) -> str:
     return f"{db_config.get('type')}:{db_config.get('host','local')}:{db_config.get('database','')}"
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPER: limpiar todas las cachés en un único lugar
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPERS DE DISPLAY — nivel módulo (antes redefinidas en cada render)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _score_color(s) -> str:
+    """Color hex según score."""
+    if s >= SCORE_FANTASTIC: return '#198754'
+    elif s >= SCORE_GREAT:     return '#0d6efd'
+    elif s >= SCORE_FAIR:       return '#fd7e14'
+    else:                       return '#dc3545'
+
+
+def _fmt_pct(val, decimals=2) -> str:
+    """Formatea un valor 0-1 como porcentaje."""
+    try:
+        return f"{float(val)*100:.{decimals}f}%" if val is not None and str(val) not in ('nan','None','') else "—"
+    except Exception:
+        return "—"
+
+
+def _fmt_num(val, entero=True) -> str:
+    """Formatea un número."""
+    try:
+        if val is None or str(val) in ('nan','None',''):
+            return "—"
+        return str(int(round(float(val)))) if entero else f"{float(val):.2f}"
+    except Exception:
+        return "—"
+
+
+def _diff_badge(csv_val, pdf_val, is_pct=True) -> str:
+    """Badge de diferencia CSV → PDF."""
+    try:
+        a, b = float(csv_val), float(pdf_val)
+        diff = (b - a) * (100 if is_pct else 1)
+        sign = '+' if diff >= 0 else ''
+        unit = 'pp' if is_pct else ''
+        txt  = f"{sign}{diff:.2f}{unit}"
+        if abs(diff) < (0.05 if is_pct else 1):
+            return f"<span style='color:#198754;font-weight:700'>✅ {txt}</span>"
+        elif abs(diff) < (0.5 if is_pct else 5):
+            return f"<span style='color:#fd7e14;font-weight:700'>🟡 {txt}</span>"
+        else:
+            return f"<span style='color:#dc3545;font-weight:700'>🔴 {txt}</span>"
+    except Exception:
+        return "—"
+
+
+def _metric_row(label, value_raw, target, higher_is_better=True,
+                is_pct=True, is_int=False) -> str:
+    """Fila visual con barra de progreso y color vs target."""
+    if value_raw is None or str(value_raw) in ('nan','None',''):
+        return (f"<tr><td style='padding:6px 8px;color:#6c757d;"
+                f"font-size:0.83em;font-weight:600'>{label}</td>"
+                f"<td colspan='2' style='padding:6px 8px;color:#6c757d'>—</td></tr>")
+    try:
+        v = float(value_raw)
+    except Exception:
+        return ""
+
+    if is_int:
+        disp = str(int(round(v)))
+    elif is_pct:
+        disp = f"{v*100:.2f}%"
+    else:
+        disp = f"{v:.2f}"
+
+    if target is not None:
+        ok = (v >= target) if higher_is_better else (v <= target)
+        status_color = '#198754' if ok else '#dc3545'
+        status_icon  = '✅' if ok else '⚠️'
+        if is_pct:
+            bar_pct = min(100, v * 100)
+        else:
+            bar_pct = min(100, max(0, 100 - (v / max(target, 1)) * 100)) if not higher_is_better else min(100, v)
+        bar_html = (
+            f"<div style='background:#2d3748;border-radius:4px;"
+            f"height:6px;width:100%;margin-top:3px;position:relative'>"
+            f"<div style='background:{status_color};width:{bar_pct:.0f}%;"
+            f"height:6px;border-radius:4px'></div>"
+            f"</div>"
+        )
+    else:
+        status_color = '#6c757d'
+        status_icon  = ''
+        bar_html = ''
+
+    return (
+        f"<tr>"
+        f"<td style='padding:5px 8px;color:#adb5bd;font-size:0.82em;"
+        f"font-weight:600;width:40%'>{label}</td>"
+        f"<td style='padding:5px 8px;font-weight:800;color:{status_color};"
+        f"font-size:0.95em;text-align:right'>{disp}</td>"
+        f"<td style='padding:5px 8px;font-size:0.9em'>{status_icon}"
+        f"{bar_html}</td>"
+        f"</tr>"
+    )
+
+
+def _get_mini_trend(driver_id: str, df_trend_batch: "pd.DataFrame") -> str:
+    """Devuelve HTML con los últimos scores del DA como bolitas de color."""
+    if df_trend_batch.empty:
+        return ""
+    rows = df_trend_batch[df_trend_batch['driver_id'] == driver_id].tail(6)
+    if rows.empty:
+        return ""
+    dots = []
+    for r in rows.itertuples(index=False):
+        c = CALIFICACION_COLORS.get(str(r.calificacion), '#6c757d')
+        dots.append(
+            f"<span title='{r.semana}: {int(r.score)}' "
+            f"style='display:inline-block;width:22px;height:22px;"
+            f"border-radius:50%;background:{c};color:white;"
+            f"font-size:0.6em;font-weight:700;text-align:center;"
+            f"line-height:22px;margin:0 1px'>{int(r.score)}</span>"
+        )
+    return "<span style='display:inline-flex;align-items:center;gap:1px'>" + "".join(dots) + "</span>"
+
+
+def _is_still_locked(val, now_dt) -> bool:
+    """Comprueba si una cuenta sigue bloqueada."""
+    try:
+        return datetime.strptime(str(val)[:19], "%Y-%m-%d %H:%M:%S") > now_dt
+    except Exception:
+        return False
+
+
+
+def _render_pagination(page_key: str, page: int, total_pages: int,
+                       total_rows: int, page_size: int,
+                       prev_key: str = None, next_key: str = None) -> int:
+    """
+    Renderiza controles de paginación reutilizables.
+    Devuelve la página actual (puede haber cambiado).
+    """
+    if total_pages <= 1:
+        return page
+
+    if prev_key is None:
+        prev_key = f"pag_prev_{page_key}"
+    if next_key is None:
+        next_key = f"pag_next_{page_key}"
+
+    offset = page * page_size
+    nav = st.columns([1, 3, 1])
+    with nav[0]:
+        if st.button("◀ Anterior", key=prev_key,
+                     disabled=(page == 0), use_container_width=True):
+            st.session_state[page_key] = page - 1
+            st.rerun()
+    with nav[1]:
+        st.markdown(
+            f"<div style='text-align:center;padding:0.4rem 0;"
+            f"color:#6c757d;font-size:0.9em'>"
+            f"Página {page+1} de {total_pages} "
+            f"({offset+1}–{min(offset+page_size, total_rows)} de {total_rows})"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+    with nav[2]:
+        if st.button("Siguiente ▶", key=next_key,
+                     disabled=(page >= total_pages - 1), use_container_width=True):
+            st.session_state[page_key] = page + 1
+            st.rerun()
+    return st.session_state.get(page_key, page)
+
+def _clear_all_caches():
+    """Invalida todas las cachés de datos. Llamar tras cualquier escritura en BD."""
+    for _fn in [
+        cached_scorecard, cached_available_batches, cached_allowed_weeks_jt,
+        cached_executive_summary, cached_driver_trend, cached_meta,
+        cached_centro_tendencia, cached_center_targets, cached_user_centro,
+        cached_prev_week, cached_trend_batch, _cached_sidebar_stats,
+    ]:
+        try:
+            _fn.clear()
+        except Exception:
+            pass
+
+
+
 def get_user_password_hash(username: str, db_config: dict) -> str | None:
     """Obtiene el hash de contraseña de un usuario. Devuelve None si no existe."""
     try:
@@ -535,6 +720,12 @@ CALIFICACION_COLORS = {
     '⚠️ FAIR':      '#fd7e14',
     '🛑 POOR':      '#dc3545',
 }
+
+# Umbrales de score — fuente única de verdad para colores y gráficos
+SCORE_FANTASTIC = 90
+SCORE_GREAT     = 80
+SCORE_FAIR      = 60
+# < SCORE_FAIR → POOR → dc3545
 
 ISSUE_COLORS = {
     '🚨': '#dc3545',   # DNR crítico
@@ -850,17 +1041,15 @@ if tab_dash:
             st.subheader("🏆 Ranking de Centros")
 
             rank_cols = st.columns(min(n_centros, 4))
-            for i, (_, row) in enumerate(df_exec.iterrows()):
+            for i, row in enumerate(df_exec.itertuples(index=False)):
                 col = rank_cols[i % len(rank_cols)]
                 delta_score = None
-                if row['score_prev'] is not None:
-                    delta_score = round(row['score_medio'] - row['score_prev'], 1)
+                if row.score_prev is not None:
+                    delta_score = round(row.score_medio - row.score_prev, 1)
 
                 medal = {0: '🥇', 1: '🥈', 2: '🥉'}.get(i, f"#{i+1}")
                 score_color = (
-                    '#198754' if row['score_medio'] >= 90 else
-                    '#0d6efd' if row['score_medio'] >= 80 else
-                    '#fd7e14' if row['score_medio'] >= 60 else '#dc3545'
+                    _score_color(row.score_medio)
                 )
 
                 delta_html = ''
@@ -873,12 +1062,12 @@ if tab_dash:
                 <div style='border:2px solid {score_color};border-radius:12px;padding:1rem;
                             text-align:center;background:{score_color}10'>
                     <div style='font-size:1.4em'>{medal}</div>
-                    <div style='font-size:1.1em;font-weight:800;color:{score_color}'>{row['centro']}</div>
+                    <div style='font-size:1.1em;font-weight:800;color:{score_color}'>{row.centro}</div>
                     <div style='font-size:0.8em;color:#6c757d'>{row['semana']}</div>
-                    <div style='font-size:2.5em;font-weight:900;color:{score_color};line-height:1.1'>{row['score_medio']}</div>
+                    <div style='font-size:2.5em;font-weight:900;color:{score_color};line-height:1.1'>{row.score_medio}</div>
                     <div>{delta_html}</div>
                     <hr style='margin:0.5rem 0;border-color:{score_color}30'>
-                    <div style='font-size:0.8em;color:#6c757d'>{row['total']} conductores</div>
+                    <div style='font-size:0.8em;color:#6c757d'>{row.total} conductores</div>
                     <div style='font-size:0.8em'>
                         <span style='color:#198754'>💎{row["n_fantastic"]}</span> &nbsp;
                         <span style='color:#0d6efd'>🥇{row["n_great"]}</span> &nbsp;
@@ -894,16 +1083,14 @@ if tab_dash:
             st.subheader("📊 Métricas Comparativas")
 
             rows_html = []
-            for i, (_, row) in enumerate(df_exec.iterrows()):
+            for i, row in enumerate(df_exec.itertuples(index=False)):
                 bg = '#ffffff' if i % 2 == 0 else '#f8f9fa'
                 score_c = (
-                    '#198754' if row['score_medio'] >= 90 else
-                    '#0d6efd' if row['score_medio'] >= 80 else
-                    '#fd7e14' if row['score_medio'] >= 60 else '#dc3545'
+                    _score_color(row.score_medio)
                 )
                 delta_score = None
-                if row['score_prev'] is not None:
-                    delta_score = round(row['score_medio'] - row['score_prev'], 1)
+                if row.score_prev is not None:
+                    delta_score = round(row.score_medio - row.score_prev, 1)
 
                 delta_cell = ''
                 if delta_score is not None:
@@ -919,16 +1106,16 @@ if tab_dash:
 
                 rows_html.append(f"""
                 <tr style='background:{bg}'>
-                    <td style='padding:8px 10px;font-weight:700'>{row['centro']}</td>
+                    <td style='padding:8px 10px;font-weight:700'>{row.centro}</td>
                     <td style='padding:8px 10px;color:#6c757d'>{row['semana']}</td>
-                    <td style='padding:8px 10px;font-weight:800;color:{score_c};font-size:1.1em'>{row['score_medio']}</td>
+                    <td style='padding:8px 10px;font-weight:800;color:{score_c};font-size:1.1em'>{row.score_medio}</td>
                     <td style='padding:8px 10px'>{delta_cell}</td>
-                    <td style='padding:8px 10px;text-align:center'><b style='color:{"#dc3545" if row["dnr_medio"]>=2 else "#198754"}'>{row['dnr_medio']:.2f}</b></td>
-                    <td style='padding:8px 10px;text-align:center'>{row['dcr_medio']:.2f}%</td>
+                    <td style='padding:8px 10px;text-align:center'><b style='color:{"#dc3545" if row["dnr_medio"]>=2 else "#198754"}'>{row.dnr_medio:.2f}</b></td>
+                    <td style='padding:8px 10px;text-align:center'>{row.dcr_medio:.2f}%</td>
                     <td style='padding:8px 10px;text-align:center'>{row['pod_medio']:.2f}%</td>
                     <td style='padding:8px 10px'>{pct_bar}</td>
-                    <td style='padding:8px 10px;text-align:center;color:#dc3545;font-weight:700'>{row['n_poor']}</td>
-                    <td style='padding:8px 10px;text-align:center;color:#6c757d'>{row['total']}</td>
+                    <td style='padding:8px 10px;text-align:center;color:#dc3545;font-weight:700'>{row.n_poor}</td>
+                    <td style='padding:8px 10px;text-align:center;color:#6c757d'>{row.total}</td>
                 </tr>
                 """)
 
@@ -961,11 +1148,6 @@ if tab_dash:
             if not df_chart.empty:
                 _y_min = max(0, float(df_chart['score_medio'].min()) - 12)
                 _y_max = min(100, float(df_chart['score_medio'].max()) + 8)
-                def _score_color(s):
-                    if s >= 90: return '#198754'
-                    elif s >= 80: return '#0d6efd'
-                    elif s >= 60: return '#fd7e14'
-                    else: return '#dc3545'
                 df_chart['color'] = df_chart['score_medio'].apply(_score_color)
                 df_chart['label'] = df_chart['score_medio'].apply(lambda x: f"{x:.1f}")
                 _bars = (alt.Chart(df_chart)
@@ -1221,13 +1403,7 @@ if tab_proc:
                                     )
                                     # Invalidar solo el caché relacionado con este lote
                                     # (no borramos todo para no perjudicar a usuarios concurrentes)
-                                    cached_scorecard.clear()
-                                    cached_available_batches.clear()
-                                    cached_allowed_weeks_jt.clear()
-                                    cached_executive_summary.clear()
-                                    cached_driver_trend.clear()
-                                    cached_meta.clear()
-                                    cached_centro_tendencia.clear()
+                                    _clear_all_caches()
                                     _audit(f"Procesó {current_center} {current_week} — {len(df)} conductores")
 
                                     if ok:
@@ -1399,13 +1575,7 @@ if tab_proc:
                         prog.progress(1.0)
 
                         # Invalidar cachés
-                        cached_scorecard.clear()
-                        cached_available_batches.clear()
-                        cached_allowed_weeks_jt.clear()
-                        cached_executive_summary.clear()
-                        cached_driver_trend.clear()
-                        cached_meta.clear()
-                        cached_centro_tendencia.clear()
+                        _clear_all_caches()
 
                         # Resumen
                         st.success(f"✅ Importación completada: {len(results_bulk)} lotes procesados.")
@@ -1433,93 +1603,135 @@ if tab_dsp:
         )
 
         if uploaded_pdfs:
-            for pdf_file in uploaded_pdfs:
-                st.markdown(f"**📄 {pdf_file.name}**")
-                with st.spinner(f"Procesando {pdf_file.name}..."):
-                    parsed = scorecard.parse_dsp_scorecard_pdf(pdf_file.read())
+            # ── PASO 1: Parsear todos los PDFs de una vez ─────────────────
+            _pdf_key = f"_dsp_parsed_{','.join(f.name for f in uploaded_pdfs)}"
+            if st.session_state.get('_dsp_pdf_key') != _pdf_key:
+                _all_parsed = []
+                _prog = st.progress(0, text="Procesando PDFs...")
+                for _i, _pdf_file in enumerate(uploaded_pdfs):
+                    _prog.progress((_i) / len(uploaded_pdfs), text=f"Leyendo {_pdf_file.name}...")
+                    _p = scorecard.parse_dsp_scorecard_pdf(_pdf_file.read())
+                    _p['_filename'] = _pdf_file.name
+                    _all_parsed.append(_p)
+                _prog.progress(1.0, text="✅ Procesados")
+                st.session_state['_dsp_pdf_key']    = _pdf_key
+                st.session_state['_dsp_all_parsed'] = _all_parsed
 
-                if not parsed['ok']:
-                    st.error(f"❌ No se pudo procesar: {', '.join(parsed['errors'])}")
-                    continue
+            _all_parsed = st.session_state.get('_dsp_all_parsed', [])
+            _tier_color = {'Fantastic': '🟢', 'Great': '🔵', 'Fair': '🟡', 'Poor': '🔴'}
+            _ok_parsed  = [p for p in _all_parsed if p['ok']]
+            _err_parsed = [p for p in _all_parsed if not p['ok']]
 
-                meta    = parsed['meta']
-                station = parsed['station']
-                centro  = meta['centro']
-                semana  = meta['semana']
-                year    = meta.get('year', datetime.now().year)
+            # ── PASO 2: Resumen compacto ──────────────────────────────────
+            if _err_parsed:
+                for _p in _err_parsed:
+                    st.error(f"❌ **{_p['_filename']}** — {', '.join(_p['errors'])}")
 
-                tier_color = {'Fantastic': '🟢', 'Great': '🔵', 'Fair': '🟡', 'Poor': '🔴'}
-                overall_icon = tier_color.get(station.get('overall_standing', ''), '⚪')
+            if _ok_parsed:
+                # Tabla resumen rápida
+                _summary_rows = []
+                for _p in _ok_parsed:
+                    _m = _p['meta']
+                    _s = _p['station']
+                    _icon = _tier_color.get(_s.get('overall_standing', ''), '⚪')
+                    _summary_rows.append({
+                        'Centro':    _m['centro'],
+                        'Semana':    f"{_m['semana']}/{_m.get('year', '')}",
+                        'Score':     _s.get('overall_score', '—'),
+                        'Standing':  f"{_icon} {_s.get('overall_standing', '—')}",
+                        'Rank':      f"#{_s.get('rank_station', '—')}",
+                        'Drivers':   len(_p['drivers']) if not _p['drivers'].empty else 0,
+                        'WHC':       len(_p['wh']) if not _p['wh'].empty else 0,
+                        'Avisos':    len(_p['errors']),
+                    })
+                st.dataframe(
+                    pd.DataFrame(_summary_rows),
+                    use_container_width=True, hide_index=True, height=None
+                )
 
-                with st.expander(
-                    f"{overall_icon} {centro} — {semana}/{year} | Score: {station.get('overall_score')} "
-                    f"({station.get('overall_standing')}) | Rank: #{station.get('rank_station')}",
-                    expanded=True
-                ):
-                    c1, c2, c3, c4 = st.columns(4)
-                    rank_wow = station.get('rank_wow')
-                    c1.metric("Overall Score", station.get('overall_score'), station.get('overall_standing'))
-                    c2.metric("Ranking Estación", f"#{station.get('rank_station')}",
-                              f"{rank_wow:+d} WoW" if rank_wow is not None else None)
-                    c3.metric(f"WHC {tier_color.get(station.get('whc_tier',''),'⚪')}",
-                              f"{station.get('whc_pct')}%", station.get('whc_tier'))
-                    c4.metric(f"LoR DPMO {tier_color.get(station.get('lor_tier',''),'⚪')}",
-                              station.get('lor_dpmo'), station.get('lor_tier'))
+                # ── PASO 3: BOTÓN ÚNICO "GUARDAR TODOS" ──────────────────
+                _btn_label = (
+                    f"💾 Guardar {len(_ok_parsed)} PDF{'s' if len(_ok_parsed) > 1 else ''}"
+                    f" — {', '.join(p['meta']['centro']+' '+p['meta']['semana'] for p in _ok_parsed)}"
+                )
+                if st.button(_btn_label, type="primary", use_container_width=True,
+                             key="save_all_pdfs"):
+                    _save_prog = st.progress(0, text="Guardando...")
+                    _save_results = []
+                    for _i, _p in enumerate(_ok_parsed):
+                        _m = _p['meta']
+                        _s = _p['station']
+                        _c, _w = _m['centro'], _m['semana']
+                        try:
+                            _ok_st = scorecard.save_station_scorecard(
+                                _s, _w, _c, db_config, user_data_session['name'])
+                            _n_upd, _n_miss = scorecard.update_drivers_from_pdf(
+                                _p['drivers'], _w, _c, db_config)
+                            _ok_wh = scorecard.save_wh_exceptions(
+                                _p['wh'], _w, _c, db_config, user_data_session['name'])
+                            _audit(f"Guardó PDF DSP {_c} {_w}")
+                            _save_results.append(
+                                f"✅ **{_c} {_w}** — {_n_upd} drivers · "
+                                f"{'✅' if _ok_wh else '⚠️'} WHC"
+                            )
+                        except Exception as _e:
+                            _save_results.append(f"❌ **{_c} {_w}** — Error: {_e}")
+                        _save_prog.progress((_i + 1) / len(_ok_parsed))
 
-                    c5, c6, c7, c8 = st.columns(4)
-                    c5.metric(f"DCR {tier_color.get(station.get('dcr_tier',''),'⚪')}",
-                              f"{station.get('dcr_pct')}%", station.get('dcr_tier'))
-                    c6.metric(f"DNR DPMO {tier_color.get(station.get('dnr_tier',''),'⚪')}",
-                              station.get('dnr_dpmo'), station.get('dnr_tier'))
-                    c7.metric(f"FICO {tier_color.get(station.get('fico_tier',''),'⚪')}",
-                              station.get('fico'), station.get('fico_tier'))
-                    c8.metric(f"POD {tier_color.get(station.get('pod_tier',''),'⚪')}",
-                              f"{station.get('pod_pct')}%", station.get('pod_tier'))
+                    # Limpiar cachés una sola vez al final
+                    for _cache in [cached_scorecard, cached_available_batches,
+                                   cached_allowed_weeks_jt, cached_executive_summary,
+                                   cached_driver_trend, cached_meta, cached_centro_tendencia]:
+                        _cache.clear()
+                    # Limpiar estado para no re-guardar accidentalmente
+                    st.session_state.pop('_dsp_pdf_key', None)
+                    st.session_state.pop('_dsp_all_parsed', None)
 
-                    fa1 = station.get('focus_area_1') or '—'
-                    fa2 = station.get('focus_area_2') or '—'
-                    fa3 = station.get('focus_area_3') or '—'
-                    st.info(f"🎯 **Focus Areas Amazon:** 1. {fa1} · 2. {fa2} · 3. {fa3}")
+                    st.success("**Resultado del guardado:**\n\n" + "\n\n".join(_save_results))
 
-                    n_drivers = len(parsed['drivers']) if not parsed['drivers'].empty else 0
-                    n_wh      = len(parsed['wh']) if not parsed['wh'].empty else 0
-                    st.caption(f"📊 {n_drivers} conductores extraídos · ⏰ {n_wh} excepciones WHC")
+                # ── PASO 4: Detalle por PDF (cerrado por defecto) ─────────
+                st.markdown("---")
+                st.caption("🔍 Detalle por PDF — haz clic para expandir")
+                for _p in _ok_parsed:
+                    _m = _p['meta']
+                    _s = _p['station']
+                    _icon = _tier_color.get(_s.get('overall_standing', ''), '⚪')
+                    _exp_title = (
+                        f"{_icon} {_m['centro']} — {_m['semana']}/{_m.get('year','')} · "
+                        f"Score {_s.get('overall_score')} ({_s.get('overall_standing')}) · "
+                        f"Rank #{_s.get('rank_station')}"
+                    )
+                    with st.expander(_exp_title, expanded=False):
+                        _c1, _c2, _c3, _c4 = st.columns(4)
+                        _rw = _s.get('rank_wow')
+                        _c1.metric("Overall Score", _s.get('overall_score'), _s.get('overall_standing'))
+                        _c2.metric("Ranking", f"#{_s.get('rank_station')}",
+                                   f"{_rw:+d} WoW" if _rw is not None else None)
+                        _c3.metric(f"WHC {_tier_color.get(_s.get('whc_tier',''),'⚪')}",
+                                   f"{_s.get('whc_pct')}%", _s.get('whc_tier'))
+                        _c4.metric(f"LoR DPMO {_tier_color.get(_s.get('lor_tier',''),'⚪')}",
+                                   _s.get('lor_dpmo'), _s.get('lor_tier'))
 
-                    if parsed['errors']:
-                        st.warning(f"⚠️ Campos no encontrados: {', '.join(parsed['errors'])}")
+                        _c5, _c6, _c7, _c8 = st.columns(4)
+                        _c5.metric(f"DCR {_tier_color.get(_s.get('dcr_tier',''),'⚪')}",
+                                   f"{_s.get('dcr_pct')}%", _s.get('dcr_tier'))
+                        _c6.metric(f"DNR DPMO {_tier_color.get(_s.get('dnr_tier',''),'⚪')}",
+                                   _s.get('dnr_dpmo'), _s.get('dnr_tier'))
+                        _c7.metric(f"FICO {_tier_color.get(_s.get('fico_tier',''),'⚪')}",
+                                   _s.get('fico'), _s.get('fico_tier'))
+                        _c8.metric(f"POD {_tier_color.get(_s.get('pod_tier',''),'⚪')}",
+                                   f"{_s.get('pod_pct')}%", _s.get('pod_tier'))
 
-                    if st.button(f"💾 Guardar {centro} {semana}/{year}", key=f"save_dsp_{centro}_{semana}",
-                                 type="primary", use_container_width=True):
-                        with st.spinner("Guardando..."):
-                            try:
-                                ok_station = scorecard.save_station_scorecard(
-                                    station, semana, centro, db_config,
-                                    user_data_session['name']
-                                )
-                                n_upd, n_miss = scorecard.update_drivers_from_pdf(
-                                    parsed['drivers'], semana, centro, db_config
-                                )
-                                ok_wh = scorecard.save_wh_exceptions(
-                                    parsed['wh'], semana, centro, db_config,
-                                    user_data_session['name']
-                                )
-                                cached_scorecard.clear()
-                                cached_available_batches.clear()
-                                cached_allowed_weeks_jt.clear()
-                                cached_executive_summary.clear()
-                                cached_driver_trend.clear()
-                                cached_meta.clear()
-                                cached_centro_tendencia.clear()
-                                _audit(f"Guardó PDF DSP {centro} {semana}")
-                                if ok_station:
-                                    st.success(
-                                        f"✅ Guardado — Drivers actualizados: {n_upd} · "
-                                        f"Sin match: {n_miss} · WHC: {'✅' if ok_wh else '❌'}"
-                                    )
-                                else:
-                                    st.error("❌ Error guardando scorecard de estación.")
-                            except Exception as e:
-                                st.error(f"❌ Error: {e}")
+                        _fa1 = _s.get('focus_area_1') or '—'
+                        _fa2 = _s.get('focus_area_2') or '—'
+                        _fa3 = _s.get('focus_area_3') or '—'
+                        st.info(f"🎯 **Focus Areas Amazon:** 1. {_fa1} · 2. {_fa2} · 3. {_fa3}")
+
+                        _nd = len(_p['drivers']) if not _p['drivers'].empty else 0
+                        _nw = len(_p['wh']) if not _p['wh'].empty else 0
+                        st.caption(f"📊 {_nd} conductores · ⏰ {_nw} excepciones WHC")
+                        if _p['errors']:
+                            st.warning(f"⚠️ Campos no encontrados: {', '.join(_p['errors'])}")
 
         st.divider()
         st.subheader("📊 Histórico DSP Scorecard por Estación")
@@ -1711,57 +1923,11 @@ with tab_excel:
                 # ── Pre-cargar tendencia batch (caché 5 min) ──
                 _df_trend_batch = cached_trend_batch(_DB_KEY, db_config, sc_center, TREND_WEEKS_BATCH)
 
-                def _get_mini_trend(driver_id: str) -> str:
-                    """Devuelve HTML con los últimos scores del DA como bolitas de color."""
-                    if _df_trend_batch.empty:
-                        return ""
-                    rows = _df_trend_batch[_df_trend_batch['driver_id'] == driver_id].tail(4)
-                    if rows.empty:
-                        return ""
-                    dots = []
-                    for r in rows.itertuples(index=False):
-                        c = CALIFICACION_COLORS.get(str(r.calificacion), '#6c757d')
-                        dots.append(
-                            f"<span title='{r.semana}: {int(r.score)}' "
-                            f"style='display:inline-block;width:22px;height:22px;"
-                            f"border-radius:50%;background:{c};color:white;"
-                            f"font-size:0.6em;font-weight:700;text-align:center;"
-                            f"line-height:22px;margin:0 1px'>{int(r.score)}</span>"
-                        )
-                    return "<span style='display:inline-flex;align-items:center;gap:1px'>" + "→".join(dots) + "</span>"
-
-                def _fmt_pct(val, decimals=2):
-                    """Formatea un valor 0-1 como porcentaje."""
-                    try:
-                        return f"{float(val)*100:.{decimals}f}%" if val is not None and str(val) not in ('nan','None','') else "—"
-                    except Exception:
-                        return "—"
-
-                def _fmt_num(val, entero=True):
-                    """Formatea un número."""
-                    try:
-                        if val is None or str(val) in ('nan','None',''):
-                            return "—"
-                        return str(int(round(float(val)))) if entero else f"{float(val):.2f}"
-                    except Exception:
-                        return "—"
-
-                def _diff_badge(csv_val, pdf_val, is_pct=True):
-                    """Badge de diferencia CSV → PDF."""
-                    try:
-                        a, b = float(csv_val), float(pdf_val)
-                        diff = (b - a) * (100 if is_pct else 1)
-                        sign = '+' if diff >= 0 else ''
-                        unit = 'pp' if is_pct else ''
-                        txt  = f"{sign}{diff:.2f}{unit}"
-                        if abs(diff) < (0.05 if is_pct else 1):
-                            return f"<span style='color:#198754;font-weight:700'>✅ {txt}</span>"
-                        elif abs(diff) < (0.5 if is_pct else 5):
-                            return f"<span style='color:#fd7e14;font-weight:700'>🟡 {txt}</span>"
-                        else:
-                            return f"<span style='color:#dc3545;font-weight:700'>🔴 {txt}</span>"
-                    except Exception:
-                        return "—"
+                # Pre-computar HTML de tendencia — O(n) una vez fuera del loop de conductores
+                _mini_trend_map: dict = {}
+                if not _df_trend_batch.empty:
+                    for _tid in _df_trend_batch['driver_id'].unique():
+                        _mini_trend_map[str(_tid)] = _get_mini_trend(str(_tid), _df_trend_batch)
 
                 # ── WoW delta por conductor (ya tenemos df_prev cargado) ───────
                 wow_map = (
@@ -1776,50 +1942,49 @@ with tab_excel:
                 df_all_sorted['_sort_cal'] = df_all_sorted['calificacion'].map(_order).fillna(4)
                 df_all_sorted = df_all_sorted.sort_values(['_sort_cal', 'score']).reset_index(drop=True)
 
-                # ── Filtros clicables por categoría ───────────────────────────
-                n_poor      = (df_sc['calificacion'] == '🛑 POOR').sum()
-                n_fair      = (df_sc['calificacion'] == '⚠️ FAIR').sum()
-                n_great     = (df_sc['calificacion'] == '🥇 GREAT').sum()
-                n_fantastic = (df_sc['calificacion'] == '💎 FANTASTIC').sum()
+                # ── Filtro por calificación — st.radio horizontal (sin rerun) ──
+                n_poor      = int((df_sc['calificacion'] == '🛑 POOR').sum())
+                n_fair      = int((df_sc['calificacion'] == '⚠️ FAIR').sum())
+                n_great     = int((df_sc['calificacion'] == '🥇 GREAT').sum())
+                n_fantastic = int((df_sc['calificacion'] == '💎 FANTASTIC').sum())
 
-                _fk = f"cal_filter_{sc_center}_{sc_week}"
-                if _fk not in st.session_state:
-                    st.session_state[_fk] = None
-                _active = st.session_state[_fk]
+                _radio_opts = [
+                    f"Todos ({len(df_sc)})",
+                    f"🛑 POOR ({n_poor})",
+                    f"⚠️ FAIR ({n_fair})",
+                    f"🥇 GREAT ({n_great})",
+                    f"💎 FANTASTIC ({n_fantastic})",
+                ]
+                _radio_key = f"radio_filter_{sc_center}_{sc_week}"
+                _radio_sel = st.radio(
+                    "Filtrar:", _radio_opts, index=0,
+                    horizontal=True, label_visibility="collapsed",
+                    key=_radio_key
+                )
 
-                _bc = st.columns(5)
-                with _bc[0]:
-                    if st.button("🔍 Todos" + (" ✓" if _active is None else ""),
-                                 key=f"btn_all_{sc_center}_{sc_week}", use_container_width=True):
-                        st.session_state[_fk] = None; st.rerun()  # estado mutado antes → no loop
-                with _bc[1]:
-                    if st.button(f"🛑 POOR  {n_poor}" + (" ✓" if _active == '🛑 POOR' else ""),
-                                 key=f"btn_poor_{sc_center}_{sc_week}", use_container_width=True):
-                        st.session_state[_fk] = None if _active == '🛑 POOR' else '🛑 POOR'; st.rerun()
-                with _bc[2]:
-                    if st.button(f"⚠️ FAIR  {n_fair}" + (" ✓" if _active == '⚠️ FAIR' else ""),
-                                 key=f"btn_fair_{sc_center}_{sc_week}", use_container_width=True):
-                        st.session_state[_fk] = None if _active == '⚠️ FAIR' else '⚠️ FAIR'; st.rerun()
-                with _bc[3]:
-                    if st.button(f"🥇 GREAT  {n_great}" + (" ✓" if _active == '🥇 GREAT' else ""),
-                                 key=f"btn_great_{sc_center}_{sc_week}", use_container_width=True):
-                        st.session_state[_fk] = None if _active == '🥇 GREAT' else '🥇 GREAT'; st.rerun()
-                with _bc[4]:
-                    if st.button(f"💎 FANTASTIC  {n_fantastic}" + (" ✓" if _active == '💎 FANTASTIC' else ""),
-                                 key=f"btn_fantas_{sc_center}_{sc_week}", use_container_width=True):
-                        st.session_state[_fk] = None if _active == '💎 FANTASTIC' else '💎 FANTASTIC'; st.rerun()
+                # Mapear selección a valor de calificación (None = todos)
+                _cal_map = {
+                    _radio_opts[0]: None,
+                    _radio_opts[1]: '🛑 POOR',
+                    _radio_opts[2]: '⚠️ FAIR',
+                    _radio_opts[3]: '🥇 GREAT',
+                    _radio_opts[4]: '💎 FANTASTIC',
+                }
+                _cal_activo = _cal_map.get(_radio_sel)
 
-                _cal_activo = st.session_state[_fk]
                 if _cal_activo:
                     df_visible = df_all_sorted[df_all_sorted['calificacion'] == _cal_activo].copy()
                 else:
                     df_visible = df_all_sorted
 
                 # ── Paginación ─────────────────────────────────────────────────
+                # Usar radio key como base — al cambiar filtro, resetear página
                 _pk = f"page_{sc_center}_{sc_week}"
-                if _pk not in st.session_state or st.session_state.get(f"{_fk}_prev") != _cal_activo:
+                _prev_filter_key = f"prev_filter_{sc_center}_{sc_week}"
+                if (st.session_state.get(_prev_filter_key) != _cal_activo
+                        or _pk not in st.session_state):
                     st.session_state[_pk] = 0
-                st.session_state[f"{_fk}_prev"] = _cal_activo
+                st.session_state[_prev_filter_key] = _cal_activo
 
                 _total_visible = len(df_visible)
                 _n_pages = max(1, (_total_visible + DRIVERS_PER_PAGE - 1) // DRIVERS_PER_PAGE)
@@ -1838,73 +2003,15 @@ with tab_excel:
                 st.caption(_pag_info)
 
                 if _n_pages > 1:
-                    _nav = st.columns([1, 2, 1])
-                    with _nav[0]:
-                        if st.button("◀ Anterior", key=f"prev_{sc_center}_{sc_week}", disabled=(_page == 0), use_container_width=True):
-                            st.session_state[_pk] = _page - 1; st.rerun()
-                    with _nav[1]:
-                        st.markdown(f"<div style='text-align:center;padding-top:6px;font-size:0.85em;color:#6c757d'>{_page+1} / {_n_pages}</div>", unsafe_allow_html=True)
-                    with _nav[2]:
-                        if st.button("Siguiente ▶", key=f"next_{sc_center}_{sc_week}", disabled=(_page >= _n_pages - 1), use_container_width=True):
-                            st.session_state[_pk] = _page + 1; st.rerun()
-
-                # ── Loop por conductor ─────────────────────────────────────────
-                # ── _metric_row helper (definido fuera del loop) ─────────
-                def _metric_row(label, value_raw, target, higher_is_better=True,
-                                is_pct=True, is_int=False):
-                    """Fila visual con barra de progreso y color vs target."""
-                    if value_raw is None or str(value_raw) in ('nan','None',''):
-                        return (f"<tr><td style='padding:6px 8px;color:#6c757d;"
-                                f"font-size:0.83em;font-weight:600'>{label}</td>"
-                                f"<td colspan='2' style='padding:6px 8px;color:#6c757d'>—</td></tr>")
-                    try:
-                        v = float(value_raw)
-                    except Exception:
-                        return ""
-
-                    if is_int:
-                        disp = str(int(round(v)))
-                    elif is_pct:
-                        disp = f"{v*100:.2f}%"
-                    else:
-                        disp = f"{v:.2f}"
-
-                    # Color y estado vs target
-                    if target is not None:
-                        ok = (v >= target) if higher_is_better else (v <= target)
-                        status_color = '#198754' if ok else '#dc3545'
-                        status_icon  = '✅' if ok else '⚠️'
-                        # Barra de progreso
-                        if is_pct:
-                            bar_pct = min(100, v * 100)
-                            tgt_pct = min(100, target * 100)
-                        else:
-                            bar_pct = min(100, max(0, 100 - (v / max(target, 1)) * 100)) if not higher_is_better else min(100, (v / max(target * 2, 1)) * 100)
-                            tgt_pct = 50
-                        bar_html = (
-                            f"<div style='background:#2d3748;border-radius:4px;"
-                            f"height:6px;width:100%;margin-top:3px;position:relative'>"
-                            f"<div style='background:{status_color};width:{bar_pct:.0f}%;"
-                            f"height:6px;border-radius:4px'></div>"
-                            f"</div>"
-                        )
-                    else:
-                        status_color = '#6c757d'
-                        status_icon  = ''
-                        bar_html = ''
-
-                    return (
-                        f"<tr>"
-                        f"<td style='padding:5px 8px;color:#adb5bd;font-size:0.82em;"
-                        f"font-weight:600;width:40%'>{label}</td>"
-                        f"<td style='padding:5px 8px;font-weight:800;color:{status_color};"
-                        f"font-size:0.95em;text-align:right'>{disp}</td>"
-                        f"<td style='padding:5px 8px;font-size:0.9em'>{status_icon}"
-                        f"{bar_html}</td>"
-                        f"</tr>"
+                    _render_pagination(
+                        _pk, _page, _n_pages, _total_visible, DRIVERS_PER_PAGE,
+                        prev_key=f'prev_{sc_center}_{sc_week}',
+                        next_key=f'next_{sc_center}_{sc_week}',
                     )
 
 
+                # ── Loop por conductor ─────────────────────────────────────────
+                # ── _metric_row helper (definido fuera del loop) ─────────
                 # Targets cacheados UNA VEZ fuera del loop (antes: 1 llamada por conductor)
                 _t = cached_center_targets(_DB_KEY, db_config, sc_center)
 
@@ -1924,7 +2031,7 @@ with tab_excel:
                         wow_str  = f" <span style='color:{wow_col};font-size:0.85em'>{wow_icon}{delta_s:+.0f}</span>"
 
                     # Mini-tendencia
-                    mini_trend = _get_mini_trend(str(row['driver_id']))
+                    mini_trend = _mini_trend_map.get(str(row['driver_id']), '')
 
                     # Label del expander
                     exp_label = (
@@ -2507,24 +2614,11 @@ with tab_hist:
                     st.divider()
 
                     # Paginador
-                    pc1, pc2, pc3 = st.columns([1, 3, 1])
-                    with pc1:
-                        if st.button("◀ Anterior", disabled=(page == 0), use_container_width=True):
-                            st.session_state['hist_page'] = page - 1
-                            st.rerun()
-                    with pc2:
-                        st.markdown(
-                            f"<div style='text-align:center;padding:0.4rem 0;"
-                            f"color:#6c757d;font-size:0.9em'>"
-                            f"Página {page+1} de {total_pages} "
-                            f"({offset+1}–{min(offset+PAGE_SIZE, total_rows)} de {total_rows:,})"
-                            f"</div>",
-                            unsafe_allow_html=True
-                        )
-                    with pc3:
-                        if st.button("Siguiente ▶", disabled=(page >= total_pages - 1), use_container_width=True):
-                            st.session_state['hist_page'] = page + 1
-                            st.rerun()
+                    _render_pagination(
+                        'hist_page', page, total_pages, total_rows, PAGE_SIZE,
+                        prev_key='hist_prev', next_key='hist_next',
+                    )
+
 
                     st.dataframe(
                         df_filtered,
@@ -2602,15 +2696,10 @@ with tab_hist:
                 c3.metric('Score medio', f"{df_filtered['score'].mean():.1f}")
                 c4.metric('DCR medio',   f"{(df_filtered['dcr_pct'].mean() if 'dcr_pct' in df_filtered.columns else 0):.2f}%")
                 st.divider()
-                pc1, pc2, pc3 = st.columns([1, 3, 1])
-                with pc1:
-                    if st.button("◄ Anterior", key="hist_prev2", disabled=(page==0), use_container_width=True):
-                        st.session_state["hist_page"] = page - 1; st.rerun()
-                with pc2:
-                    st.markdown(f"<div style='text-align:center;color:#6c757d'>Pág {page+1}/{total_pages}</div>", unsafe_allow_html=True)
-                with pc3:
-                    if st.button("Siguiente ►", key="hist_next2", disabled=(page>=total_pages-1), use_container_width=True):
-                        st.session_state["hist_page"] = page + 1; st.rerun()
+                _render_pagination(
+                    'hist_page', page, total_pages, total_rows, PAGE_SIZE,
+                    prev_key='hist_prev2', next_key='hist_next2',
+                )
                 st.dataframe(df_page_hist, use_container_width=True)
 
             else:
@@ -2700,15 +2789,15 @@ if tab_admin:
             }
 
             rows_html = []
-            for i, (_, row) in enumerate(df_users.iterrows()):
+            for i, row in enumerate(df_users.itertuples(index=False)):
                 bg = '#ffffff' if i % 2 == 0 else '#f8f9fa'
 
                 # Estado de la cuenta
-                if not row['active']:
+                if not row.active:
                     status = "<span style='color:#6c757d'>⬛ Inactivo</span>"
-                elif row.get('locked_until') and pd.notna(row['locked_until']):
+                elif row.get('locked_until') and pd.notna(row.locked_until):
                     try:
-                        lu = datetime.strptime(str(row['locked_until'])[:19], "%Y-%m-%d %H:%M:%S")
+                        lu = datetime.strptime(str(row.locked_until)[:19], "%Y-%m-%d %H:%M:%S")
                         if datetime.now() < lu:
                             status = "<span style='color:#dc3545'>🔒 Bloqueado</span>"
                         else:
@@ -2723,10 +2812,10 @@ if tab_admin:
 
                 rows_html.append(f"""
                 <tr style='background:{bg}'>
-                    <td style='padding:8px 12px;font-weight:600'>{row['username']}{pwd_warn}</td>
-                    <td style='padding:8px 12px'>{role_badge.get(row['role'], row['role'])}</td>
+                    <td style='padding:8px 12px;font-weight:600'>{row.username}{pwd_warn}</td>
+                    <td style='padding:8px 12px'>{role_badge.get(row.role, row.role)}</td>
                     <td style='padding:8px 12px'>{status}</td>
-                    <td style='padding:8px 12px;text-align:center;color:{"#dc3545" if row.get("attempt_count",0) and row["attempt_count"] > 0 else "#6c757d"}'>{int(row['attempt_count']) if row.get('attempt_count') and pd.notna(row['attempt_count']) else 0}</td>
+                    <td style='padding:8px 12px;text-align:center;color:{"#dc3545" if row.get("attempt_count",0) and row["attempt_count"] > 0 else "#6c757d"}'>{int(row.attempt_count) if row.get('attempt_count') and pd.notna(row.attempt_count) else 0}</td>
                 </tr>
                 """)
 
@@ -3009,38 +3098,33 @@ if tab_admin:
             else:
                 # Filtrar solo las que siguen bloqueadas — comparar datetime, no string
                 now_dt = datetime.now()
-                def _is_still_locked(val):
-                    try:
-                        return datetime.strptime(str(val)[:19], "%Y-%m-%d %H:%M:%S") > now_dt
-                    except Exception:
-                        return False
-                df_still_locked = df_locked[df_locked['locked_until'].apply(_is_still_locked)]
+                df_still_locked = df_locked[df_locked['locked_until'].apply(lambda v: _is_still_locked(v, now_dt))]
 
                 if df_still_locked.empty:
                     st.success("✅ No hay cuentas actualmente bloqueadas.")
                 else:
                     st.warning(f"⚠️ {len(df_still_locked)} cuenta(s) bloqueada(s) por intentos fallidos:")
 
-                    for _, lrow in df_still_locked.iterrows():
+                    for lrow in df_still_locked.itertuples(index=False):
                         try:
-                            lu = datetime.strptime(str(lrow['locked_until'])[:19], "%Y-%m-%d %H:%M:%S")
+                            lu = datetime.strptime(str(lrow.locked_until)[:19], "%Y-%m-%d %H:%M:%S")
                             remaining_mins = max(0, int((lu - datetime.now()).total_seconds() // 60))
                         except Exception:
                             remaining_mins = "?"
 
                         lcol1, lcol2 = st.columns([3, 1])
                         lcol1.markdown(
-                            f"🔒 **{lrow['username']}** — "
-                            f"{int(lrow['attempt_count'])} intentos fallidos — "
+                            f"🔒 **{lrow.username}** — "
+                            f"{int(lrow.attempt_count)} intentos fallidos — "
                             f"se desbloquea en ~{remaining_mins} min"
                         )
-                        if lcol2.button("Desbloquear", key=f"unlock_{lrow['username']}", use_container_width=True):
+                        if lcol2.button("Desbloquear", key=f"unlock_{lrow.username}", use_container_width=True):
                             try:
                                 scorecard.record_login_attempt(
-                                    lrow['username'], success=True, db_config=db_config
+                                    lrow.username, success=True, db_config=db_config
                                 )
-                                _audit(f"Desbloqueó manualmente a '{lrow['username']}'")
-                                st.success(f"✅ '{lrow['username']}' desbloqueado")
+                                _audit(f"Desbloqueó manualmente a '{lrow.username}'")
+                                st.success(f"✅ '{lrow.username}' desbloqueado")
                                 st.rerun()  # Refresca lista de bloqueados
                             except Exception as e:
                                 st.error(f"❌ Error: {e}")
@@ -3078,16 +3162,16 @@ if tab_admin:
 
                 # Tabla de asignaciones actuales
                 rows_jt = []
-                for _, jr in df_jts.iterrows():
-                    centro_actual = jr['centro_asignado'] or "—  (todos)"
+                for jr in df_jts.itertuples(index=False):
+                    centro_actual = jr.centro_asignado or "—  (todos)"
                     badge_c = (
                         f"<span style='background:#0d6efd;color:white;padding:2px 8px;"
-                        f"border-radius:10px;font-size:0.8em'>{jr['centro_asignado']}</span>"
-                        if jr['centro_asignado']
+                        f"border-radius:10px;font-size:0.8em'>{jr.centro_asignado}</span>"
+                        if jr.centro_asignado
                         else "<span style='color:#6c757d;font-size:0.85em'>Sin restricción</span>"
                     )
                     rows_jt.append(
-                        f"<tr><td style='padding:8px 12px;font-weight:600'>{jr['username']}</td>"
+                        f"<tr><td style='padding:8px 12px;font-weight:600'>{jr.username}</td>"
                         f"<td style='padding:8px 12px'>{badge_c}</td></tr>"
                     )
 
@@ -3234,12 +3318,7 @@ if tab_admin:
                 if st.form_submit_button("Limpiar"):
                     if clean_center and clean_week:
                         scorecard.delete_scorecard_batch(clean_week, clean_center, db_config=db_config)
-                        cached_scorecard.clear()
-                        cached_available_batches.clear()
-                        cached_allowed_weeks_jt.clear()
-                        cached_executive_summary.clear()
-                        cached_driver_trend.clear()
-                        cached_meta.clear()
+                        _clear_all_caches()
                         _audit(f"Eliminó lote {clean_center} {clean_week}")
                         st.success(f"✅ {clean_center} — {clean_week} eliminado")
                     else:
@@ -3254,10 +3333,7 @@ if tab_admin:
                              type="primary", use_container_width=True):
                     if scorecard.reset_production_database(db_config):
                         # Reset total BD — invalidar toda la caché (correcto: toda la BD cambió)
-                        cached_scorecard.clear(); cached_available_batches.clear()
-                        cached_allowed_weeks_jt.clear(); cached_executive_summary.clear()
-                        cached_driver_trend.clear(); cached_meta.clear()
-                        cached_centro_tendencia.clear(); cached_center_targets.clear()
+                        _clear_all_caches()
                         _audit("⚠️ RESET TOTAL de base de datos")
                         st.success("✅ Base de datos limpiada")
                         st.rerun()  # Refresca UI tras reset de BD
@@ -3273,10 +3349,7 @@ if tab_admin:
                 if ok:
                     st.success(f"✅ Mantenimiento completado: {removed} duplicados eliminados.")
                     # Mantenimiento puede cambiar cualquier dato — invalidar toda la caché
-                    cached_scorecard.clear(); cached_available_batches.clear()
-                    cached_allowed_weeks_jt.clear(); cached_executive_summary.clear()
-                    cached_driver_trend.clear(); cached_meta.clear()
-                    cached_centro_tendencia.clear()
+                    _clear_all_caches()
                 else:
                     st.error("❌ Error durante el mantenimiento. Ver logs.")
 
