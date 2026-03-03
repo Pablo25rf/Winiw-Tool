@@ -138,7 +138,7 @@ lxml>=5.0.0
 psycopg2-binary>=2.9.0
 bcrypt>=4.1.0
 python-dotenv>=1.0.0
-pdfplumber>=0.10.0  # v3.2: Extracción PDF DSP Scorecard
+pdfplumber>=0.10.0  # v3.8: Extracción PDF DSP Scorecard
 ```
 
 ### 3.3 Compatibilidad
@@ -193,7 +193,7 @@ CREATE TABLE scorecards (
     uploaded_by         VARCHAR(100),                   -- Usuario que subió
     timestamp           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
-    -- v3.2: Columnas para comparación con datos oficiales PDF
+    -- v3.8: Columnas para comparación con datos oficiales PDF
     entregados_oficial  DOUBLE PRECISION,               -- Paquetes según PDF
     dcr_oficial         DOUBLE PRECISION,               -- DCR oficial Amazon
     pod_oficial         DOUBLE PRECISION,               -- POD oficial Amazon
@@ -260,7 +260,7 @@ CREATE TABLE center_targets (
 );
 ```
 
-#### Tabla: `station_scorecards` ⭐ NUEVO v3.2
+#### Tabla: `station_scorecards` ⭐ NUEVO v3.8
 
 KPIs oficiales de estación extraídos del PDF DSP Scorecard.
 
@@ -339,7 +339,7 @@ CREATE INDEX idx_ss_fecha ON station_scorecards (fecha_semana DESC);
 CREATE INDEX idx_ss_standing ON station_scorecards (overall_standing);
 ```
 
-#### Tabla: `wh_exceptions` ⭐ NUEVO v3.2
+#### Tabla: `wh_exceptions` ⭐ NUEVO v3.8
 
 Infracciones de Working Hours por conductor.
 
@@ -1142,7 +1142,6 @@ SELECT semana, centro, COUNT(*) FROM scorecards GROUP BY semana, centro ORDER BY
 
 **Para soporte técnico o preguntas**:
 - Revisar logs en `/logs/winiw_scorecard.log`
-- Consultar [INFORME_REFACTORIZACION_FINAL.md](./INFORME_REFACTORIZACION_FINAL.md)
 - GitHub: https://github.com/Pablo25rf/Winiw-Tool
 
 ---

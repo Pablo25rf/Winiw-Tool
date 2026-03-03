@@ -164,9 +164,6 @@ El archivo `amazon_quality.db` se crea automáticamente en el directorio raíz.
 
 ```bash
 # Desde el directorio del proyecto
-python -m pytest test_scorecard_v37.py -v
-
-# O directamente con unittest
 python -m unittest test_scorecard_v37 -v
 ```
 
@@ -181,7 +178,7 @@ Los tests usan SQLite en directorios temporales — no tocan la BD de producció
 # ...
 
 # Verificar que los tests pasan
-python -m pytest test_scorecard_v37.py -v
+python -m unittest test_scorecard_v37 -v
 
 # Subir cambios
 git add -A

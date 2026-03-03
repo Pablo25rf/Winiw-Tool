@@ -72,17 +72,13 @@
 
 ## 🚀 INSTALACIÓN
 
-### Paso 1: Reemplazar Archivos
+### Paso 1: Actualizar el repositorio
 
 ```bash
-# Backup primero (por seguridad)
-cp app.py app_OLD.py
-cp amazon_scorecard_ultra_robust_v3_FINAL.py motor_OLD.py
-
-# Instalar versión Superadmin
-cp app_SUPERADMIN_V3.1.py app.py
-cp amazon_scorecard_SUPERADMIN_V3.1.py amazon_scorecard_ultra_robust_v3_FINAL.py
+git pull origin main
 ```
+
+La funcionalidad Superadmin está integrada en `app.py` desde v3.8 — no hay archivos separados.
 
 ### Paso 2: Reiniciar App
 
@@ -437,8 +433,8 @@ Imposible eliminarte accidentalmente.
 Ahora eres el **único Superadmin** del sistema. Tienes control total y nadie más puede crear administradores sin tu autorización.
 
 **Archivos a usar**:
-- `app_SUPERADMIN_V3.1.py` → Reemplaza `app.py`
-- `amazon_scorecard_SUPERADMIN_V3.1.py` → Reemplaza motor
+- `app.py` — aplicación principal (incluye funcionalidad Superadmin)
+- `amazon_scorecard_ultra_robust_v3_FINAL.py` — motor de procesamiento
 
 **¿Preguntas?** Todo está documentado arriba. 😊
 

@@ -1110,7 +1110,7 @@ if tab_dash:
                     <td style='padding:8px 10px;color:#6c757d'>{row.semana}</td>
                     <td style='padding:8px 10px;font-weight:800;color:{score_c};font-size:1.1em'>{row.score_medio}</td>
                     <td style='padding:8px 10px'>{delta_cell}</td>
-                    <td style='padding:8px 10px;text-align:center'><b style='color:{"#dc3545" if row["dnr_medio"]>=2 else "#198754"}'>{row.dnr_medio:.2f}</b></td>
+                    <td style='padding:8px 10px;text-align:center'><b style='color:{"#dc3545" if row.dnr_medio>=2 else "#198754"}'>{row.dnr_medio:.2f}</b></td>
                     <td style='padding:8px 10px;text-align:center'>{row.dcr_medio:.2f}%</td>
                     <td style='padding:8px 10px;text-align:center'>{row.pod_medio:.2f}%</td>
                     <td style='padding:8px 10px'>{pct_bar}</td>
@@ -2795,7 +2795,7 @@ if tab_admin:
                 # Estado de la cuenta
                 if not row.active:
                     status = "<span style='color:#6c757d'>⬛ Inactivo</span>"
-                elif row.get('locked_until') and pd.notna(row.locked_until):
+                elif getattr(row, 'locked_until', None) is not None and pd.notna(row.locked_until):
                     try:
                         lu = datetime.strptime(str(row.locked_until)[:19], "%Y-%m-%d %H:%M:%S")
                         if datetime.now() < lu:
@@ -2808,14 +2808,14 @@ if tab_admin:
                     status = "<span style='color:#198754'>✅ Activo</span>"
 
                 # Indicador de cambio de contraseña pendiente
-                pwd_warn = " <span style='color:#fd7e14;font-size:0.75em'>⚠️ cambio pendiente</span>" if row.get('must_change_password') else ""
+                pwd_warn = " <span style='color:#fd7e14;font-size:0.75em'>⚠️ cambio pendiente</span>" if row.must_change_password else ""
 
                 rows_html.append(f"""
                 <tr style='background:{bg}'>
                     <td style='padding:8px 12px;font-weight:600'>{row.username}{pwd_warn}</td>
                     <td style='padding:8px 12px'>{role_badge.get(row.role, row.role)}</td>
                     <td style='padding:8px 12px'>{status}</td>
-                    <td style='padding:8px 12px;text-align:center;color:{"#dc3545" if row.get("attempt_count",0) and row["attempt_count"] > 0 else "#6c757d"}'>{int(row.attempt_count) if row.get('attempt_count') and pd.notna(row.attempt_count) else 0}</td>
+                    <td style='padding:8px 12px;text-align:center;color:{"#dc3545" if getattr(row,"attempt_count",0) and getattr(row,"attempt_count",0) > 0 else "#6c757d"}'>{int(row.attempt_count) if pd.notna(row.attempt_count) else 0}</td>
                 </tr>
                 """)
 
