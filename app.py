@@ -969,7 +969,7 @@ if tab_dash:
                 df_chart['color'] = df_chart['score_medio'].apply(_score_color)
                 df_chart['label'] = df_chart['score_medio'].apply(lambda x: f"{x:.1f}")
                 _bars = (alt.Chart(df_chart)
-                    .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
+                    .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6, size=min(80, max(20, 500 // max(1, len(df_chart)))))
                     .encode(
                         x=alt.X('centro:N', axis=alt.Axis(labelAngle=0), title='Centro'),
                         y=alt.Y('score_medio:Q', scale=alt.Scale(domain=[_y_min, _y_max]),
@@ -994,7 +994,7 @@ if tab_dash:
                     df_poor_chart['label'] = df_poor_chart['n_poor'].astype(str)
                     _top_poor = int(df_poor_chart['n_poor'].max()) + 3
                     _bars_p = (alt.Chart(df_poor_chart)
-                        .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6, color='#dc3545')
+                        .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6, color='#dc3545', size=min(80, max(20, 500 // max(1, len(df_poor_chart)))))
                         .encode(
                             x=alt.X('centro:N', axis=alt.Axis(labelAngle=0), title='Centro'),
                             y=alt.Y('n_poor:Q', title='Nº POOR',
@@ -1904,6 +1904,9 @@ with tab_excel:
                     )
 
 
+                # Targets cacheados UNA VEZ fuera del loop (antes: 1 llamada por conductor)
+                _t = cached_center_targets(_DB_KEY, db_config, sc_center)
+
                 for _, row in df_page.iterrows():
                     cal       = str(row['calificacion'])
                     cal_color = CALIFICACION_COLORS.get(cal, '#6c757d')
@@ -1965,7 +1968,9 @@ with tab_excel:
                         # ── Bloque principal: CSV vs PDF ───────────────────────
                         has_pdf = int(row.get('pdf_loaded', 0) or 0) == 1
 
-                        col_csv, col_pdf = st.columns(2)
+                        _cols = st.columns([3, 2]) if has_pdf else st.columns([1])
+                        col_csv = _cols[0]
+                        col_pdf = _cols[1] if has_pdf else None
 
                         with col_csv:
                             st.markdown(
@@ -1974,7 +1979,6 @@ with tab_excel:
                                 unsafe_allow_html=True
                             )
                             # Obtener targets del centro para mostrar vs objetivo
-                            _t = cached_center_targets(_DB_KEY, db_config, sc_center)
 
                             _rows = (
                                 _metric_row("Entregas", row.get('entregados'), None, is_int=True, is_pct=False) +
@@ -1997,9 +2001,10 @@ with tab_excel:
 </table>
 """), unsafe_allow_html=True)
 
-                        with col_pdf:
+                        if col_pdf is not None:
+                         with col_pdf:
                             st.markdown(
-                                "<div style='font-weight:700;color:#232f3e;margin-bottom:6px'>"
+                                "<div style='font-weight:700;color:#ffc107;margin-bottom:6px'>"
                                 "🏆 Scorecard Oficial Amazon (PDF)</div>",
                                 unsafe_allow_html=True
                             )
