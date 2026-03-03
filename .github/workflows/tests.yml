@@ -1,40 +1,56 @@
-name: Tests Winiw Scorecard
+name: Tests
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
 
 jobs:
   test:
-    name: Tests unitarios
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
-      - name: Checkout codigo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Configurar Python 3.11
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Instalar dependencias
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Ejecutar tests
+      - name: Syntax check
+        run: |
+          python -m py_compile app.py
+          python -m py_compile amazon_scorecard_ultra_robust_v3_FINAL.py
+          python -m py_compile test_scorecard_v37.py
+          echo "✅ Syntax OK"
+
+      - name: Lint critico (ruff)
+        run: |
+          pip install ruff --quiet
+          ruff check app.py amazon_scorecard_ultra_robust_v3_FINAL.py \
+            --select=E9,F63,F7,F82 --quiet
+          echo "✅ Sin errores criticos de lint"
+
+      - name: Run tests
         env:
           WINIW_ADMIN_USER: test_admin
-          WINIW_ADMIN_PASS: test_pass_seguro_123
-        run: |
-          python -m unittest test_scorecard_v37 -v
+          WINIW_ADMIN_PASS: Test_Pass_Seguro_2024!
+        run: python -m unittest test_scorecard_v37 -v
 
-      - name: Verificar sintaxis app.py
-        run: python -m py_compile app.py && echo "app.py OK"
-
-      - name: Verificar sintaxis motor
-        run: python -m py_compile amazon_scorecard_ultra_robust_v3_FINAL.py && echo "motor OK"
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-failure-logs
+          path: |
+            *.log
+            logs/
+          retention-days: 7
