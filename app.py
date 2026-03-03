@@ -1063,16 +1063,16 @@ if tab_dash:
                             text-align:center;background:{score_color}10'>
                     <div style='font-size:1.4em'>{medal}</div>
                     <div style='font-size:1.1em;font-weight:800;color:{score_color}'>{row.centro}</div>
-                    <div style='font-size:0.8em;color:#6c757d'>{row['semana']}</div>
+                    <div style='font-size:0.8em;color:#6c757d'>{row.semana}</div>
                     <div style='font-size:2.5em;font-weight:900;color:{score_color};line-height:1.1'>{row.score_medio}</div>
                     <div>{delta_html}</div>
                     <hr style='margin:0.5rem 0;border-color:{score_color}30'>
                     <div style='font-size:0.8em;color:#6c757d'>{row.total} conductores</div>
                     <div style='font-size:0.8em'>
-                        <span style='color:#198754'>💎{row["n_fantastic"]}</span> &nbsp;
-                        <span style='color:#0d6efd'>🥇{row["n_great"]}</span> &nbsp;
-                        <span style='color:#fd7e14'>⚠️{row["n_fair"]}</span> &nbsp;
-                        <span style='color:#dc3545'>🛑{row["n_poor"]}</span>
+                        <span style='color:#198754'>💎{row.n_fantastic}</span> &nbsp;
+                        <span style='color:#0d6efd'>🥇{row.n_great}</span> &nbsp;
+                        <span style='color:#fd7e14'>⚠️{row.n_fair}</span> &nbsp;
+                        <span style='color:#dc3545'>🛑{row.n_poor}</span>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -1101,18 +1101,18 @@ if tab_dash:
                 # Barra de % top2
                 pct_bar = f"""<div style='display:flex;align-items:center;gap:6px'>
                     <div style='flex:1;background:#e9ecef;border-radius:3px;height:6px'>
-                    <div style='width:{row["pct_top2"]}%;background:{score_c};height:6px;border-radius:3px'></div></div>
-                    <span style='font-size:0.85em;font-weight:700;color:{score_c}'>{row["pct_top2"]}%</span></div>"""
+                    <div style='width:{row.pct_top2}%;background:{score_c};height:6px;border-radius:3px'></div></div>
+                    <span style='font-size:0.85em;font-weight:700;color:{score_c}'>{row.pct_top2}%</span></div>"""
 
                 rows_html.append(f"""
                 <tr style='background:{bg}'>
                     <td style='padding:8px 10px;font-weight:700'>{row.centro}</td>
-                    <td style='padding:8px 10px;color:#6c757d'>{row['semana']}</td>
+                    <td style='padding:8px 10px;color:#6c757d'>{row.semana}</td>
                     <td style='padding:8px 10px;font-weight:800;color:{score_c};font-size:1.1em'>{row.score_medio}</td>
                     <td style='padding:8px 10px'>{delta_cell}</td>
                     <td style='padding:8px 10px;text-align:center'><b style='color:{"#dc3545" if row["dnr_medio"]>=2 else "#198754"}'>{row.dnr_medio:.2f}</b></td>
                     <td style='padding:8px 10px;text-align:center'>{row.dcr_medio:.2f}%</td>
-                    <td style='padding:8px 10px;text-align:center'>{row['pod_medio']:.2f}%</td>
+                    <td style='padding:8px 10px;text-align:center'>{row.pod_medio:.2f}%</td>
                     <td style='padding:8px 10px'>{pct_bar}</td>
                     <td style='padding:8px 10px;text-align:center;color:#dc3545;font-weight:700'>{row.n_poor}</td>
                     <td style='padding:8px 10px;text-align:center;color:#6c757d'>{row.total}</td>
