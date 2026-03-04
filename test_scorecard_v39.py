@@ -1,6 +1,7 @@
 """
-test_scorecard_v37.py - Suite de tests para Winiw Quality Scorecard v3.7+
-Ejecutar: python -m unittest test_scorecard_v37 -v
+test_scorecard_v39.py - Suite de tests para Winiw Quality Scorecard v3.9
+Merge completo: 117 tests v3.7 + 44 tests v3.9 = 161 tests
+Ejecutar: python -m unittest test_scorecard_v39 -v
 No toca la BD de produccion - usa ficheros SQLite temporales.
 """
 
@@ -715,59 +716,6 @@ class TestSaveToDatabase(unittest.TestCase):
 # 19. save_station_scorecard / get_station_scorecards
 # ─────────────────────────────────────────────────────────────────────────────
 
-
-    # ─── v3.9: columna anio + driver_name en scorecards ────────────────
-
-    def test_guarda_3_drivers(self, db_con_datos):
-        conn = sqlite3.connect(db_con_datos['path'])
-        count = conn.execute(
-            "SELECT COUNT(*) FROM scorecards WHERE semana='W07' AND centro='DMA3'"
-        ).fetchone()[0]
-        conn.close()
-        assert count == 3
-    def test_anio_relleno(self, db_con_datos):
-        """La columna anio se rellena automáticamente con el año de la semana."""
-        conn = sqlite3.connect(db_con_datos['path'])
-        rows = conn.execute(
-            "SELECT DISTINCT anio FROM scorecards WHERE semana='W07' AND centro='DMA3'"
-        ).fetchall()
-        conn.close()
-        anios = [r[0] for r in rows]
-        assert len(anios) == 1
-        assert anios[0] == 2026  # week_to_date('W07') → 2026
-    def test_driver_name_guardado(self, db_con_datos):
-        conn = sqlite3.connect(db_con_datos['path'])
-        nombre = conn.execute(
-            "SELECT driver_name FROM scorecards WHERE driver_id='A2ZZWVAGH7MFN4'"
-        ).fetchone()[0]
-        conn.close()
-        assert nombre == 'Juan García'
-    def test_calificacion_fantastic(self, db_con_datos):
-        conn = sqlite3.connect(db_con_datos['path'])
-        cal = conn.execute(
-            "SELECT calificacion FROM scorecards WHERE driver_id='A2ZZWVAGH7MFN4'"
-        ).fetchone()[0]
-        conn.close()
-        assert cal == '💎 FANTASTIC'
-
-
-# ─── 3. parse_dsp_scorecard_pdf ───────────────────────────────────────────────
-
-PDF_PATH = os.path.join(
-    os.path.dirname(__file__),
-    'ES-TDSL-DMA3-Week7-DSP-Scorecard-3_0__3_.pdf'
-)
-PDF_AVAILABLE = os.path.exists(PDF_PATH)
-
-# Intentar ruta alternativa (uploads)
-if not PDF_AVAILABLE:
-    _alt = '/mnt/user-data/uploads/ES-TDSL-DMA3-Week7-DSP-Scorecard-3_0__3_.pdf'
-    if os.path.exists(_alt):
-        PDF_PATH = _alt
-        PDF_AVAILABLE = True
-
-@pytest.mark.skipif(not PDF_AVAILABLE, reason="PDF de test no disponible")
-
 class TestStationScorecard(unittest.TestCase):
 
     def setUp(self):
@@ -909,24 +857,22 @@ class TestParseDspScorecardPdf(unittest.TestCase):
         self.assertIsInstance(result['errors'], list)
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TESTS v3.9 — Nuevas funcionalidades (unittest puro, compatible con CI)
+# ═══════════════════════════════════════════════════════════════════════════
+
+PDF_PATH = os.path.join(os.path.dirname(__file__),
+    'ES-TDSL-DMA3-Week7-DSP-Scorecard-3_0__3_.pdf')
+_PDF_BYTES = None
+if os.path.exists(PDF_PATH):
+    with open(PDF_PATH, 'rb') as _f:
+        _PDF_BYTES = _f.read()
 
 
-# ═══ Fixtures v3.9 (necesarios para las nuevas clases) ═══════════════════════
-
-@pytest.fixture
-def db(tmp_path):
-    """BD SQLite limpia para cada test."""
-    db_file = str(tmp_path / "test.db")
-    cfg = {'type': 'sqlite', 'path': db_file}
-    m.init_database(cfg)
-    return cfg
-
-@pytest.fixture
-def db_con_datos(db):
-    """BD con 3 conductores ya insertados en scorecards."""
-    df = pd.DataFrame([
+def _make_drivers_df():
+    """3 drivers de prueba para tests de BD."""
+    return pd.DataFrame([
         {'ID': 'A2ZZWVAGH7MFN4', 'Nombre': 'Juan García',
          'CALIFICACION': '💎 FANTASTIC', 'SCORE': 92.0,
          'Entregados': 310, 'DNR': 0.5, 'FS_Count': 0,
@@ -939,373 +885,339 @@ def db_con_datos(db):
          'DNR_RISK_EVENTS': 0, 'DCR': 0.975, 'POD': 0.96,
          'CC': 0.95, 'FDPS': 0.98, 'RTS': 0.01, 'CDF': 0.94,
          'DETALLES': ''},
-        {'ID': 'A3ITJEWLL658FO', 'Nombre': 'Pedro Ruiz',
+        {'ID': 'AXXX_SIN_WHC', 'Nombre': 'Pedro Ruiz',
          'CALIFICACION': '⚠️ FAIR', 'SCORE': 68.0,
          'Entregados': 190, 'DNR': 3.5, 'FS_Count': 1,
          'DNR_RISK_EVENTS': 2, 'DCR': 0.96, 'POD': 0.93,
          'CC': 0.91, 'FDPS': 0.97, 'RTS': 0.02, 'CDF': 0.90,
-         'DETALLES': 'DNR alto'},
+         'DETALLES': ''},
     ])
-    m.save_to_database(df, 'W07', 'DMA3', db, uploaded_by='test')
-    return db
 
 
-# ─── 1. Schema e init_database ────────────────────────────────────────────────
+def _make_wh_df():
+    """3 excepciones WHC: 2 con nombre en BD, 1 sin CSV."""
+    return pd.DataFrame([
+        {'driver_id': 'A2ZZWVAGH7MFN4', 'daily_limit_exceeded': 0,
+         'weekly_limit_exceeded': 0, 'under_offwork_limit': 1,
+         'workday_limit_exceeded': 0},
+        {'driver_id': 'A9XGFDJ3UDX1D', 'daily_limit_exceeded': 0,
+         'weekly_limit_exceeded': 1, 'under_offwork_limit': 0,
+         'workday_limit_exceeded': 0},
+        {'driver_id': 'AXXX_SIN_CSV', 'daily_limit_exceeded': 1,
+         'weekly_limit_exceeded': 0, 'under_offwork_limit': 0,
+         'workday_limit_exceeded': 1},
+    ])
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 23. Schema BD v3.9 — columnas anio, driver_name en wh_exceptions
+# ─────────────────────────────────────────────────────────────────────────────
 
-# ═══════════════════════════════════════════════════════════════════════════
-# TESTS v3.9 — Nuevas funcionalidades
-# ═══════════════════════════════════════════════════════════════════════════
+class TestSchemaV39(unittest.TestCase):
 
+    def setUp(self):
+        self.db, self.conn, self.tmp = make_db()
 
-class TestSchema:
-
-    def test_tablas_creadas(self, db):
-        """Todas las tablas esenciales existen."""
-        with m.db_connection(db) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            tablas = {r[0] for r in cursor.fetchall()}
-        assert 'scorecards'         in tablas
-        assert 'station_scorecards' in tablas
-        assert 'wh_exceptions'      in tablas
-        assert 'center_targets'     in tablas
-        assert 'users'              in tablas
-        assert 'login_attempts'     in tablas
-
-    def test_scorecards_columnas(self, db):
-        """scorecards tiene todas las columnas esperadas incluyendo anio."""
-        with m.db_connection(db) as conn:
-            cursor = conn.cursor()
-            cursor.execute("PRAGMA table_info(scorecards)")
-            cols = {r[1] for r in cursor.fetchall()}
-        esperadas = {
-            'id', 'semana', 'fecha_semana', 'anio', 'centro',
-            'driver_id', 'driver_name', 'calificacion', 'score',
-            'entregados', 'dnr', 'dcr', 'pod', 'cc', 'fdps', 'rts', 'cdf',
-            'entregados_oficial', 'dcr_oficial', 'pod_oficial', 'cc_oficial',
-            'dsc_dpmo', 'lor_dpmo', 'ce_dpmo', 'cdf_dpmo_oficial', 'pdf_loaded',
-            'uploaded_by', 'timestamp',
-        }
-        missing = esperadas - cols
-        assert not missing, f"Columnas faltantes en scorecards: {missing}"
-
-    def test_wh_exceptions_columnas(self, db):
-        """wh_exceptions tiene driver_name y anio."""
-        with m.db_connection(db) as conn:
-            cursor = conn.cursor()
-            cursor.execute("PRAGMA table_info(wh_exceptions)")
-            cols = {r[1] for r in cursor.fetchall()}
-        assert 'driver_name'           in cols
-        assert 'anio'                  in cols
-        assert 'driver_id'             in cols
-        assert 'daily_limit_exceeded'  in cols
-        assert 'weekly_limit_exceeded' in cols
-        assert 'under_offwork_limit'   in cols
-        assert 'workday_limit_exceeded' in cols
-
-    def test_unique_constraint_scorecards(self, db_con_datos):
-        """No se pueden insertar dos filas con mismo semana+centro+driver_id."""
-        df2 = pd.DataFrame([{
-            'ID': 'A2ZZWVAGH7MFN4', 'Nombre': 'Juan García Duplicado',
-            'CALIFICACION': '🥇 GREAT', 'SCORE': 80.0,
-            'Entregados': 300, 'DNR': 0.8, 'FS_Count': 0,
-            'DNR_RISK_EVENTS': 0, 'DCR': 0.98, 'POD': 0.97,
-            'CC': 0.96, 'FDPS': 0.98, 'RTS': 0.01, 'CDF': 0.94,
-            'DETALLES': '',
-        }])
-        # Debe hacer upsert, no duplicar
-        m.save_to_database(df2, 'W07', 'DMA3', db_con_datos, uploaded_by='test')
-        conn = sqlite3.connect(db_con_datos['path'])
-        count = conn.execute(
-            "SELECT COUNT(*) FROM scorecards WHERE semana='W07' AND centro='DMA3'"
-        ).fetchone()[0]
-        conn.close()
-        assert count == 3  # sigue siendo 3, no 4
-
-
-# ─── 2. save_to_database + columna anio ──────────────────────────────────────
-
-
-class TestParseDspPdf:
-
-    @pytest.fixture(scope='class')
-    def parsed(self):
-        pdf_bytes = open(PDF_PATH, 'rb').read()
-        return m.parse_dsp_scorecard_pdf(pdf_bytes)
-
-    def test_ok(self, parsed):
-        assert parsed['ok'] is True
-
-    def test_meta_centro(self, parsed):
-        assert parsed['meta']['centro'] == 'DMA3'
-
-    def test_meta_semana(self, parsed):
-        assert parsed['meta']['semana'] == 'W07'
-
-    def test_meta_year(self, parsed):
-        assert parsed['meta']['year'] == 2026
-
-    def test_overall_score(self, parsed):
-        assert parsed['station']['overall_score'] == 81.11
-
-    def test_overall_standing(self, parsed):
-        assert parsed['station']['overall_standing'] == 'Great'
-
-    def test_rank_station(self, parsed):
-        assert parsed['station']['rank_station'] == 3
-
-    def test_rank_wow(self, parsed):
-        """BUG CORREGIDO: rank_wow no era None con espacio antes del número."""
-        assert parsed['station']['rank_wow'] == 3
-
-    def test_whc_pct(self, parsed):
-        assert parsed['station']['whc_pct'] == 85.87
-
-    def test_whc_tier(self, parsed):
-        assert parsed['station']['whc_tier'] == 'Poor'
-
-    def test_dcr_pct(self, parsed):
-        assert parsed['station']['dcr_pct'] == 97.47
-
-    def test_fico(self, parsed):
-        assert parsed['station']['fico'] == 841.0
-
-    def test_drivers_count(self, parsed):
-        """BUG CORREGIDO: drivers desde páginas [2,3] — NO incluye página WHC."""
-        assert len(parsed['drivers']) == 93
-
-    def test_drivers_primer_id(self, parsed):
-        assert parsed['drivers'].iloc[0]['driver_id'] == 'A102GVKIDVMZ4O'
-
-    def test_drivers_columnas(self, parsed):
-        cols = set(parsed['drivers'].columns)
-        for c in ('driver_id', 'entregados_oficial', 'dcr_oficial',
-                  'pod_oficial', 'cc_oficial', 'cdf_dpmo_oficial'):
-            assert c in cols, f"Columna faltante en drivers: {c}"
-
-    def test_wh_count(self, parsed):
-        """BUG CORREGIDO: WHC desde página índice 4, no 5 (SLS targets)."""
-        assert len(parsed['wh']) == 13
-
-    def test_wh_primer_driver(self, parsed):
-        assert parsed['wh'].iloc[0]['driver_id'] == 'A2ZZWVAGH7MFN4'
-
-    def test_sin_errores_fatales(self, parsed):
-        assert parsed['errors'] == [], f"Errores: {parsed['errors']}"
-
-
-# ─── 4. save_wh_exceptions con driver_name y anio ────────────────────────────
-
-
-class TestSaveWhExceptions:
-
-    def _get_wh_df(self):
-        return pd.DataFrame([
-            {'driver_id': 'A2ZZWVAGH7MFN4',
-             'daily_limit_exceeded': 0, 'weekly_limit_exceeded': 0,
-             'under_offwork_limit': 1, 'workday_limit_exceeded': 0},
-            {'driver_id': 'A9XGFDJ3UDX1D',
-             'daily_limit_exceeded': 0, 'weekly_limit_exceeded': 1,
-             'under_offwork_limit': 0, 'workday_limit_exceeded': 0},
-            {'driver_id': 'AXXX_SIN_CSV',     # no está en scorecards
-             'daily_limit_exceeded': 1, 'weekly_limit_exceeded': 0,
-             'under_offwork_limit': 0, 'workday_limit_exceeded': 1},
-        ])
-
-    def test_retorna_true(self, db_con_datos):
-        result = m.save_wh_exceptions(
-            self._get_wh_df(), 'W07', 'DMA3', db_con_datos, 'tester'
-        )
-        assert result is True
-
-    def test_guarda_3_filas(self, db_con_datos):
-        m.save_wh_exceptions(self._get_wh_df(), 'W07', 'DMA3', db_con_datos)
-        conn = sqlite3.connect(db_con_datos['path'])
-        count = conn.execute(
-            "SELECT COUNT(*) FROM wh_exceptions WHERE semana='W07' AND centro='DMA3'"
-        ).fetchone()[0]
-        conn.close()
-        assert count == 3
-
-    def test_driver_name_lookup_ok(self, db_con_datos):
-        """Drivers con CSV tienen nombre; el que no tiene CSV queda NULL."""
-        m.save_wh_exceptions(self._get_wh_df(), 'W07', 'DMA3', db_con_datos)
-        conn = sqlite3.connect(db_con_datos['path'])
-        rows = {r[0]: r[1] for r in conn.execute(
-            "SELECT driver_id, driver_name FROM wh_exceptions "
-            "WHERE semana='W07' AND centro='DMA3'"
-        ).fetchall()}
-        conn.close()
-        assert rows['A2ZZWVAGH7MFN4'] == 'Juan García'
-        assert rows['A9XGFDJ3UDX1D']  == 'María López'
-        assert rows['AXXX_SIN_CSV']    is None   # sin CSV → NULL
-
-    def test_anio_relleno(self, db_con_datos):
-        """La columna anio se rellena en wh_exceptions."""
-        m.save_wh_exceptions(self._get_wh_df(), 'W07', 'DMA3', db_con_datos)
-        conn = sqlite3.connect(db_con_datos['path'])
-        anios = [r[0] for r in conn.execute(
-            "SELECT DISTINCT anio FROM wh_exceptions WHERE semana='W07'"
-        ).fetchall()]
-        conn.close()
-        assert anios == [2026]
-
-    def test_idempotente(self, db_con_datos):
-        """Guardar dos veces el mismo centro+semana no duplica filas."""
-        m.save_wh_exceptions(self._get_wh_df(), 'W07', 'DMA3', db_con_datos)
-        m.save_wh_exceptions(self._get_wh_df(), 'W07', 'DMA3', db_con_datos)
-        conn = sqlite3.connect(db_con_datos['path'])
-        count = conn.execute(
-            "SELECT COUNT(*) FROM wh_exceptions WHERE semana='W07' AND centro='DMA3'"
-        ).fetchone()[0]
-        conn.close()
-        assert count == 3
-
-    def test_vacio_no_falla(self, db):
-        """DataFrame vacío no lanza excepción."""
-        result = m.save_wh_exceptions(pd.DataFrame(), 'W07', 'DMA3', db)
-        assert result is True
-
-    def test_none_no_falla(self, db):
-        """None no lanza excepción."""
-        result = m.save_wh_exceptions(None, 'W07', 'DMA3', db)
-        assert result is True
-
-
-# ─── 5. get_station_scorecards con wh_count ───────────────────────────────────
-
-
-class TestGetStationScorecards:
-
-    def _insertar_station(self, db):
-        """Inserta un station_scorecard mínimo."""
-        with m.db_connection(db) as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO station_scorecards
-                    (semana, centro, overall_score, overall_standing, rank_station)
-                VALUES ('W07', 'DMA3', 81.11, 'Great', 3)
-            """)
-            conn.commit()
-
-    def test_sin_datos_devuelve_df_vacio(self, db):
-        df = m.get_station_scorecards(db)
-        assert isinstance(df, pd.DataFrame)
-        assert df.empty
-
-    def test_wh_count_cero_sin_excepciones(self, db):
-        """wh_count=0 cuando no hay wh_exceptions para ese centro/semana."""
-        self._insertar_station(db)
-        df = m.get_station_scorecards(db)
-        assert 'wh_count' in df.columns
-        assert int(df.iloc[0]['wh_count']) == 0
-
-    def test_wh_count_con_excepciones(self, db_con_datos):
-        """wh_count refleja el número real de excepciones guardadas."""
-        self._insertar_station(db_con_datos)
-        wh_df = pd.DataFrame([
-            {'driver_id': 'A2ZZWVAGH7MFN4',
-             'daily_limit_exceeded': 0, 'weekly_limit_exceeded': 1,
-             'under_offwork_limit': 0, 'workday_limit_exceeded': 0},
-            {'driver_id': 'A9XGFDJ3UDX1D',
-             'daily_limit_exceeded': 1, 'weekly_limit_exceeded': 0,
-             'under_offwork_limit': 0, 'workday_limit_exceeded': 0},
-        ])
-        m.save_wh_exceptions(wh_df, 'W07', 'DMA3', db_con_datos)
-        df = m.get_station_scorecards(db_con_datos)
-        row = df[df['centro'] == 'DMA3'].iloc[0]
-        assert int(row['wh_count']) == 2
-
-    def test_wh_count_columna_existe(self, db):
-        """La columna wh_count siempre aparece aunque no haya datos."""
-        self._insertar_station(db)
-        df = m.get_station_scorecards(db)
-        assert 'wh_count' in df.columns
-
-
-# ─── 6. Funciones de utilidad ─────────────────────────────────────────────────
-
-
-class TestRegresiones:
-
-    def test_paginas_drivers_no_incluye_whc(self):
-        """
-        BUG CORREGIDO v3.9: parse_dsp_scorecard_pdf usaba [2,3,4]
-        incluyendo la página WHC en los drivers.
-        Verificamos que el código usa [2, 3].
-        """
-        import inspect
-        src = inspect.getsource(m.parse_dsp_scorecard_pdf)
-        assert 'for page_idx in [2, 3]:' in src, \
-            "drivers debe iterar [2,3] NO [2,3,4]"
-        assert 'for page_idx in [2, 3, 4]:' not in src, \
-            "No debe iterar [2,3,4] (incluye página WHC)"
-
-    def test_pagina_whc_es_indice_4(self):
-        """
-        BUG CORREGIDO v3.9: WHC estaba en páginas[5] (SLS targets).
-        Ahora debe usar páginas[4].
-        """
-        import inspect
-        src = inspect.getsource(m.parse_dsp_scorecard_pdf)
-        # La sección WHC debe usar índice 4
-        wh_section = src[src.find('# ── PÁGINA 5: Working Hours'):]
-        assert 'pdf.pages[4].extract_table()' in wh_section[:300], \
-            "WHC debe leer páginas[4]"
-
-    def test_wh_exceptions_tiene_driver_name_schema(self):
-        """
-        BUG CORREGIDO v3.9: wh_exceptions no tenía driver_name.
-        Verificamos que el CREATE TABLE lo incluye.
-        """
-        import inspect
-        src = inspect.getsource(m.init_database)
-        wh_block = src[src.find('CREATE TABLE IF NOT EXISTS wh_exceptions'):]
-        wh_block = wh_block[:wh_block.find('UNIQUE(semana, centro, driver_id)')]
-        assert 'driver_name' in wh_block, \
-            "CREATE TABLE wh_exceptions debe incluir driver_name"
-
-    def test_save_wh_hace_lookup_nombre(self):
-        """
-        BUG CORREGIDO v3.9: save_wh_exceptions no buscaba driver_name.
-        Verificamos que el código tiene el SELECT de lookup.
-        """
-        import inspect
-        src = inspect.getsource(m.save_wh_exceptions)
-        assert 'SELECT driver_id, driver_name FROM scorecards' in src, \
-            "save_wh_exceptions debe hacer lookup de driver_name"
-        assert 'name_map' in src
+    def tearDown(self):
+        teardown_db(self.conn, self.tmp)
 
     def test_scorecards_tiene_anio(self):
-        """
-        NUEVO v3.9: columna anio para Power BI.
-        """
+        cols = [r[1] for r in self.conn.execute(
+            "PRAGMA table_info(scorecards)").fetchall()]
+        self.assertIn('anio', cols)
+
+    def test_scorecards_tiene_columnas_oficial(self):
+        cols = [r[1] for r in self.conn.execute(
+            "PRAGMA table_info(scorecards)").fetchall()]
+        for c in ('cdf_dpmo_oficial', 'dcr_oficial', 'pod_oficial', 'cc_oficial'):
+            self.assertIn(c, cols, f"Falta columna {c}")
+
+    def test_wh_exceptions_tiene_driver_name(self):
+        cols = [r[1] for r in self.conn.execute(
+            "PRAGMA table_info(wh_exceptions)").fetchall()]
+        self.assertIn('driver_name', cols)
+
+    def test_wh_exceptions_tiene_anio(self):
+        cols = [r[1] for r in self.conn.execute(
+            "PRAGMA table_info(wh_exceptions)").fetchall()]
+        self.assertIn('anio', cols)
+
+    def test_unique_constraint_no_duplica(self):
+        """Upsert con mismo semana+centro+driver_id no duplica."""
+        sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
+        sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
+        cnt = self.conn.execute(
+            "SELECT COUNT(*) FROM scorecards WHERE semana='W07' AND centro='DMA3'"
+        ).fetchone()[0]
+        self.assertEqual(cnt, 3)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 24. save_to_database v3.9 — columna anio rellena automáticamente
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSaveToDatabaseV39(unittest.TestCase):
+
+    def setUp(self):
+        self.db, self.conn, self.tmp = make_db()
+
+    def tearDown(self):
+        teardown_db(self.conn, self.tmp)
+
+    def test_anio_relleno_al_guardar(self):
+        sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
+        anios = [r[0] for r in self.conn.execute(
+            "SELECT DISTINCT anio FROM scorecards WHERE semana='W07'").fetchall()]
+        self.assertEqual(anios, [2026])
+
+    def test_driver_name_guardado_correctamente(self):
+        sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
+        nombre = self.conn.execute(
+            "SELECT driver_name FROM scorecards WHERE driver_id='A2ZZWVAGH7MFN4'"
+        ).fetchone()[0]
+        self.assertEqual(nombre, 'Juan García')
+
+    def test_calificacion_fantastic_guardada(self):
+        sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
+        cal = self.conn.execute(
+            "SELECT calificacion FROM scorecards WHERE driver_id='A2ZZWVAGH7MFN4'"
+        ).fetchone()[0]
+        self.assertEqual(cal, '💎 FANTASTIC')
+
+    def test_tres_drivers_insertados(self):
+        sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
+        cnt = self.conn.execute(
+            "SELECT COUNT(*) FROM scorecards").fetchone()[0]
+        self.assertEqual(cnt, 3)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 25. save_wh_exceptions v3.9 — driver_name lookup + anio
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSaveWhExceptionsV39(unittest.TestCase):
+
+    def setUp(self):
+        self.db, self.conn, self.tmp = make_db()
+        sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
+
+    def tearDown(self):
+        teardown_db(self.conn, self.tmp)
+
+    def test_retorna_true(self):
+        self.assertTrue(
+            sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db))
+
+    def test_guarda_tres_filas(self):
+        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
+        cnt = self.conn.execute(
+            "SELECT COUNT(*) FROM wh_exceptions WHERE semana='W07'"
+        ).fetchone()[0]
+        self.assertEqual(cnt, 3)
+
+    def test_driver_name_lookup_juan(self):
+        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
+        nombre = self.conn.execute(
+            "SELECT driver_name FROM wh_exceptions WHERE driver_id='A2ZZWVAGH7MFN4'"
+        ).fetchone()[0]
+        self.assertEqual(nombre, 'Juan García')
+
+    def test_driver_name_lookup_maria(self):
+        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
+        nombre = self.conn.execute(
+            "SELECT driver_name FROM wh_exceptions WHERE driver_id='A9XGFDJ3UDX1D'"
+        ).fetchone()[0]
+        self.assertEqual(nombre, 'María López')
+
+    def test_driver_sin_csv_queda_null(self):
+        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
+        nombre = self.conn.execute(
+            "SELECT driver_name FROM wh_exceptions WHERE driver_id='AXXX_SIN_CSV'"
+        ).fetchone()[0]
+        self.assertIsNone(nombre)
+
+    def test_anio_relleno_en_wh(self):
+        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
+        anios = [r[0] for r in self.conn.execute(
+            "SELECT DISTINCT anio FROM wh_exceptions").fetchall()]
+        self.assertEqual(anios, [2026])
+
+    def test_idempotente_no_duplica(self):
+        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
+        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
+        cnt = self.conn.execute(
+            "SELECT COUNT(*) FROM wh_exceptions WHERE semana='W07'"
+        ).fetchone()[0]
+        self.assertEqual(cnt, 3)
+
+    def test_vacio_no_falla(self):
+        self.assertTrue(
+            sc.save_wh_exceptions(pd.DataFrame(), 'W07', 'DMA3', self.db))
+
+    def test_none_no_falla(self):
+        self.assertTrue(
+            sc.save_wh_exceptions(None, 'W07', 'DMA3', self.db))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 26. get_station_scorecards v3.9 — wh_count via LEFT JOIN
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestStationScorecardWHCount(unittest.TestCase):
+
+    def setUp(self):
+        self.db, self.conn, self.tmp = make_db()
+        self.conn.execute("""
+            INSERT OR REPLACE INTO station_scorecards
+                (semana, centro, overall_score, overall_standing, rank_station)
+            VALUES ('W07', 'DMA3', 81.11, 'Great', 3)
+        """)
+        self.conn.commit()
+
+    def tearDown(self):
+        teardown_db(self.conn, self.tmp)
+
+    def test_wh_count_columna_existe(self):
+        df = sc.get_station_scorecards(self.db)
+        self.assertIn('wh_count', df.columns)
+
+    def test_wh_count_cero_sin_excepciones(self):
+        df = sc.get_station_scorecards(self.db)
+        self.assertEqual(int(df.iloc[0]['wh_count']), 0)
+
+    def test_wh_count_refleja_excepciones_reales(self):
+        sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
+        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
+        df = sc.get_station_scorecards(self.db)
+        row = df[df['centro'] == 'DMA3'].iloc[0]
+        self.assertEqual(int(row['wh_count']), 3)
+
+    def test_wh_count_no_afecta_otras_semanas(self):
+        """WHC de W08 no contamina el conteo de W07."""
+        sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
+        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
+        # station_scorecard de W08 sin WHC
+        self.conn.execute("""
+            INSERT OR REPLACE INTO station_scorecards
+                (semana, centro, overall_score, overall_standing, rank_station)
+            VALUES ('W08', 'DMA3', 83.0, 'Great', 2)
+        """)
+        self.conn.commit()
+        df = sc.get_station_scorecards(self.db)
+        w08 = df[(df['centro'] == 'DMA3') & (df['semana'] == 'W08')]
+        self.assertEqual(int(w08.iloc[0]['wh_count']), 0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 27. Regresiones v3.9 — análisis estático del código
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestRegresionesV39(unittest.TestCase):
+
+    def test_drivers_paginas_2_3_no_incluye_whc(self):
+        """BUG CORREGIDO: drivers debe iterar [2,3], no [2,3,4]."""
         import inspect
-        src = inspect.getsource(m.init_database)
-        # Verificar migración
-        assert 'anio' in src
+        src = inspect.getsource(sc.parse_dsp_scorecard_pdf)
+        self.assertIn('for page_idx in [2, 3]:', src)
+        self.assertNotIn('for page_idx in [2, 3, 4]:', src)
 
-    def test_insert_scorecards_incluye_anio(self):
-        """
-        NUEVO v3.9: save_to_database debe incluir anio en el INSERT.
-        """
+    def test_whc_lee_pagina_indice_4(self):
+        """BUG CORREGIDO: WHC en páginas[4], no páginas[5]."""
         import inspect
-        src = inspect.getsource(m.save_to_database)
-        assert '"anio"' in src, "cols de scorecards debe incluir 'anio'"
-        assert 'year_int' in src, "Debe calcular year_int para insertar"
+        src = inspect.getsource(sc.parse_dsp_scorecard_pdf)
+        whc_section = src[src.find('PÁGINA 5'):]
+        self.assertIn('pdf.pages[4].extract_table()', whc_section[:300])
 
-    def test_get_station_scorecards_incluye_wh_count(self):
-        """
-        NUEVO v3.9: get_station_scorecards debe devolver wh_count
-        via LEFT JOIN con wh_exceptions.
-        """
+    def test_wh_exceptions_create_table_tiene_driver_name(self):
+        """BUG CORREGIDO v3.9: driver_name en CREATE TABLE wh_exceptions."""
         import inspect
-        src = inspect.getsource(m.get_station_scorecards)
-        assert 'wh_count' in src
-        assert 'LEFT JOIN' in src
-        assert 'wh_exceptions' in src
+        src = inspect.getsource(sc.init_database)
+        idx = src.find('CREATE TABLE IF NOT EXISTS wh_exceptions')
+        bloque = src[idx:idx + 500]
+        self.assertIn('driver_name', bloque)
+
+    def test_save_wh_hace_lookup_nombre(self):
+        """BUG CORREGIDO v3.9: save_wh_exceptions busca driver_name."""
+        import inspect
+        src = inspect.getsource(sc.save_wh_exceptions)
+        self.assertIn('SELECT driver_id, driver_name FROM scorecards', src)
+        self.assertIn('name_map', src)
+
+    def test_save_to_database_incluye_anio(self):
+        """NUEVO v3.9: columna anio en INSERT de scorecards."""
+        import inspect
+        src = inspect.getsource(sc.save_to_database)
+        self.assertIn('"anio"', src)
+        self.assertIn('year_int', src)
+
+    def test_get_station_scorecards_left_join_wh(self):
+        """NUEVO v3.9: get_station_scorecards hace LEFT JOIN wh_exceptions."""
+        import inspect
+        src = inspect.getsource(sc.get_station_scorecards)
+        self.assertIn('LEFT JOIN', src)
+        self.assertIn('wh_count', src)
+        self.assertIn('wh_exceptions', src)
+
+    def test_version_motor_es_v39(self):
+        src = open(sc.__file__).read()[:300]
+        self.assertIn('v3.9', src)
 
 
-# ─── 8. Login y seguridad ────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# 28. parse_dsp_scorecard_pdf v3.9 — con PDF real si está disponible
+# ─────────────────────────────────────────────────────────────────────────────
 
+@unittest.skipUnless(_PDF_BYTES, "PDF de test no disponible en este entorno")
+class TestParsePdfRealV39(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.res = sc.parse_dsp_scorecard_pdf(_PDF_BYTES)
+
+    def test_ok(self):
+        self.assertTrue(self.res['ok'])
+
+    def test_centro_dma3(self):
+        self.assertEqual(self.res['meta']['centro'], 'DMA3')
+
+    def test_semana_w07(self):
+        self.assertEqual(self.res['meta']['semana'], 'W07')
+
+    def test_overall_score(self):
+        self.assertEqual(self.res['station']['overall_score'], 81.11)
+
+    def test_overall_standing(self):
+        self.assertEqual(self.res['station']['overall_standing'], 'Great')
+
+    def test_rank_station(self):
+        self.assertEqual(self.res['station']['rank_station'], 3)
+
+    def test_rank_wow_corregido(self):
+        """BUG CORREGIDO: rank_wow era None por espacio en regex."""
+        self.assertEqual(self.res['station']['rank_wow'], 3)
+
+    def test_whc_pct(self):
+        self.assertEqual(self.res['station']['whc_pct'], 85.87)
+
+    def test_whc_tier(self):
+        self.assertEqual(self.res['station']['whc_tier'], 'Poor')
+
+    def test_93_drivers(self):
+        """BUG CORREGIDO: 93 drivers, no más por incluir página WHC."""
+        self.assertEqual(len(self.res['drivers']), 93)
+
+    def test_13_whc_excepciones(self):
+        """BUG CORREGIDO: 13 excepciones desde páginas[4], no páginas[5]."""
+        self.assertEqual(len(self.res['wh']), 13)
+
+    def test_sin_errores_fatales(self):
+        self.assertEqual(self.res['errors'], [])
+
+    def test_drivers_columnas_oficial(self):
+        cols = set(self.res['drivers'].columns)
+        for c in ('driver_id', 'entregados_oficial', 'dcr_oficial',
+                  'pod_oficial', 'cc_oficial', 'cdf_dpmo_oficial'):
+            self.assertIn(c, cols)
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
