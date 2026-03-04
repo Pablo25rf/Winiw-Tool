@@ -1,5 +1,5 @@
 """
-Winiw Quality Scorecard — app.py v3.7
+Winiw Quality Scorecard — app.py v3.9
 ======================================
 v3.3: Dashboard rediseñado, caché, JT restrictions, DSP PDF parser, WoW deltas
 v3.4: SQL injection fix, hardcoding eliminado, caché selectivo, audit log, validaciones
@@ -16,6 +16,9 @@ v3.7 (este archivo):
 
 import streamlit as st
 import pandas as pd
+import zipfile
+import tempfile
+import pathlib
 import amazon_scorecard_ultra_robust_v3_FINAL as scorecard
 import io
 import re
@@ -1475,8 +1478,6 @@ if tab_proc:
             zip_file = st.file_uploader("📁 Subir ZIP histórico", type=["zip"], key="bulk_zip")
 
             if zip_file:
-                import zipfile, tempfile, pathlib
-
                 if st.button("🚀 Procesar ZIP completo", type="primary", use_container_width=True):
                     with st.spinner("Procesando archivos del ZIP..."):
                         results_bulk = []
@@ -1570,7 +1571,7 @@ if tab_proc:
                                 else:
                                     errors_bulk.append(f"❌ {folder.name}: error en procesamiento")
 
-                                prog.progress((i+1)/total_folders)
+                                    prog.progress((i+1)/total_folders)
 
                         prog.progress(1.0)
 
@@ -1646,7 +1647,7 @@ if tab_dsp:
                     })
                 st.dataframe(
                     pd.DataFrame(_summary_rows),
-                    use_container_width=True, hide_index=True, height=None
+                    use_container_width=True, hide_index=True
                 )
 
                 # ── PASO 3: BOTÓN ÚNICO "GUARDAR TODOS" ──────────────────
@@ -1679,10 +1680,7 @@ if tab_dsp:
                         _save_prog.progress((_i + 1) / len(_ok_parsed))
 
                     # Limpiar cachés una sola vez al final
-                    for _cache in [cached_scorecard, cached_available_batches,
-                                   cached_allowed_weeks_jt, cached_executive_summary,
-                                   cached_driver_trend, cached_meta, cached_centro_tendencia]:
-                        _cache.clear()
+                    _clear_all_caches()
                     # Limpiar estado para no re-guardar accidentalmente
                     st.session_state.pop('_dsp_pdf_key', None)
                     st.session_state.pop('_dsp_all_parsed', None)
@@ -2110,64 +2108,64 @@ with tab_excel:
 """), unsafe_allow_html=True)
 
                         if col_pdf is not None:
-                         with col_pdf:
-                            st.markdown(
-                                "<div style='font-weight:700;color:#ffc107;margin-bottom:6px'>"
-                                "🏆 Scorecard Oficial Amazon (PDF)</div>",
-                                unsafe_allow_html=True
-                            )
-                            if has_pdf:
-                                pdf_rows = [
-                                    ("Entregas",         _fmt_num(row.get('entregados_oficial')),
-                                     _diff_badge(row.get('entregados'), row.get('entregados_oficial'), is_pct=False)
-                                     if row.get('entregados') else ""),
-                                    ("DCR oficial",      _fmt_pct(row.get('dcr_oficial')),
-                                     _diff_badge(row.get('dcr'), row.get('dcr_oficial')) if row.get('dcr') else ""),
-                                    ("POD oficial",      _fmt_pct(row.get('pod_oficial')),
-                                     _diff_badge(row.get('pod'), row.get('pod_oficial')) if row.get('pod') else ""),
-                                    ("CC oficial",       _fmt_pct(row.get('cc_oficial')),
-                                     _diff_badge(row.get('cc'), row.get('cc_oficial')) if row.get('cc') else ""),
-                                    ("CDF DPMO",         _fmt_num(row.get('cdf_dpmo_oficial')),     ""),
-                                    ("LOR DPMO",         _fmt_num(row.get('lor_dpmo')),             ""),
-                                    ("DSC DPMO",         _fmt_num(row.get('dsc_dpmo')),             ""),
-                                ]
-                                pdf_html_rows = ""
-                                for label, val, diff in pdf_rows:
-                                    pdf_html_rows += (
-                                        f"<tr>"
-                                        f"<td style='padding:5px 8px;color:#6c757d;font-size:0.85em;font-weight:600'>{label}</td>"
-                                        f"<td style='padding:5px 8px;font-weight:700;text-align:right'>{val}</td>"
-                                        f"<td style='padding:5px 8px;font-size:0.8em;text-align:right'>{diff}</td>"
-                                        f"</tr>"
-                                    )
-                                st.markdown(clean_html(f"""
-                                <table style='width:100%;border-collapse:collapse;
-                                              border:1px solid #198754;border-radius:6px;overflow:hidden'>
-                                    <thead>
-                                        <tr style='background:#19875415'>
-                                            <th style='padding:5px 8px;text-align:left;
-                                                       font-size:0.78em;color:#198754'>Métrica</th>
-                                            <th style='padding:5px 8px;text-align:right;
-                                                       font-size:0.78em;color:#198754'>Valor PDF</th>
-                                            <th style='padding:5px 8px;text-align:right;
-                                                       font-size:0.78em;color:#198754'>Δ CSV→PDF</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>{pdf_html_rows}</tbody>
-                                </table>
-                                <div style='font-size:0.75em;color:#6c757d;margin-top:4px'>
-                                    ✅ Diferencia pequeña · 🟡 Diferencia moderada · 🔴 Diferencia significativa
-                                </div>
-                                """), unsafe_allow_html=True)
-                            else:
+                            with col_pdf:
                                 st.markdown(
+                                    "<div style='font-weight:700;color:#ffc107;margin-bottom:6px'>"
+                                    "🏆 Scorecard Oficial Amazon (PDF)</div>",
+                                    unsafe_allow_html=True
+                                )
+                                if has_pdf:
+                                    pdf_rows = [
+                                        ("Entregas",         _fmt_num(row.get('entregados_oficial')),
+                                         _diff_badge(row.get('entregados'), row.get('entregados_oficial'), is_pct=False)
+                                         if row.get('entregados') else ""),
+                                        ("DCR oficial",      _fmt_pct(row.get('dcr_oficial')),
+                                         _diff_badge(row.get('dcr'), row.get('dcr_oficial')) if row.get('dcr') else ""),
+                                        ("POD oficial",      _fmt_pct(row.get('pod_oficial')),
+                                         _diff_badge(row.get('pod'), row.get('pod_oficial')) if row.get('pod') else ""),
+                                        ("CC oficial",       _fmt_pct(row.get('cc_oficial')),
+                                         _diff_badge(row.get('cc'), row.get('cc_oficial')) if row.get('cc') else ""),
+                                        ("CDF DPMO",         _fmt_num(row.get('cdf_dpmo_oficial')),     ""),
+                                        ("LOR DPMO",         _fmt_num(row.get('lor_dpmo')),             ""),
+                                        ("DSC DPMO",         _fmt_num(row.get('dsc_dpmo')),             ""),
+                                    ]
+                                    pdf_html_rows = ""
+                                    for label, val, diff in pdf_rows:
+                                        pdf_html_rows += (
+                                            f"<tr>"
+                                            f"<td style='padding:5px 8px;color:#6c757d;font-size:0.85em;font-weight:600'>{label}</td>"
+                                            f"<td style='padding:5px 8px;font-weight:700;text-align:right'>{val}</td>"
+                                            f"<td style='padding:5px 8px;font-size:0.8em;text-align:right'>{diff}</td>"
+                                            f"</tr>"
+                                        )
+                                    st.markdown(clean_html(f"""
+                                    <table style='width:100%;border-collapse:collapse;
+                                                  border:1px solid #198754;border-radius:6px;overflow:hidden'>
+                                        <thead>
+                                            <tr style='background:#19875415'>
+                                                <th style='padding:5px 8px;text-align:left;
+                                                           font-size:0.78em;color:#198754'>Métrica</th>
+                                                <th style='padding:5px 8px;text-align:right;
+                                                           font-size:0.78em;color:#198754'>Valor PDF</th>
+                                                <th style='padding:5px 8px;text-align:right;
+                                                           font-size:0.78em;color:#198754'>Δ CSV→PDF</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>{pdf_html_rows}</tbody>
+                                    </table>
+                                    <div style='font-size:0.75em;color:#6c757d;margin-top:4px'>
+                                        ✅ Diferencia pequeña · 🟡 Diferencia moderada · 🔴 Diferencia significativa
+                                    </div>
+                                    """), unsafe_allow_html=True)
+                                else:
+                                    st.markdown(
                                     "<div style='background:#f8f9fa;border:1px dashed #ced4da;"
                                     "border-radius:6px;padding:16px;text-align:center;"
                                     "color:#6c757d;font-size:0.88em'>"
                                     "⬜ PDF oficial no cargado para este conductor"
                                     "</div>",
                                     unsafe_allow_html=True
-                                )
+                                    )
 
                         # ── Penalizaciones / Reconocimiento ───────────────────
                         st.markdown("---")
@@ -2600,6 +2598,7 @@ with tab_hist:
                 st.session_state['_hist_df'] = df_filtered
                 st.session_state['_hist_params']    = params
                 st.session_state['_hist_where_sql'] = where_sql
+                st.session_state['_hist_total_rows'] = total_rows
 
                 if total_rows == 0:
                     st.warning("No se encontraron registros con esos filtros.")
@@ -2686,7 +2685,7 @@ with tab_hist:
                 df_filtered = st.session_state["_hist_df"]
                 page      = st.session_state.get("hist_page", 0)
                 PAGE_SIZE = 200
-                total_rows = len(df_filtered)  # aproximación rápida
+                total_rows = st.session_state.get('_hist_total_rows', len(df_filtered))
                 total_pages = max(1, (total_rows + PAGE_SIZE - 1) // PAGE_SIZE)
                 offset = page * PAGE_SIZE
                 df_page_hist = df_filtered.iloc[offset:offset+PAGE_SIZE]
@@ -2700,7 +2699,23 @@ with tab_hist:
                     'hist_page', page, total_pages, total_rows, PAGE_SIZE,
                     prev_key='hist_prev2', next_key='hist_next2',
                 )
-                st.dataframe(df_page_hist, use_container_width=True)
+                st.dataframe(
+                    df_page_hist,
+                    column_config={
+                        "conductor":    st.column_config.TextColumn("Conductor", width="medium"),
+                        "id":           st.column_config.TextColumn("ID", width="small"),
+                        "calificacion": st.column_config.TextColumn("Calificación", width="small"),
+                        "score":        st.column_config.NumberColumn("Score", format="%d"),
+                        "dnr":          st.column_config.NumberColumn("DNR", format="%d"),
+                        "dcr_pct":      st.column_config.NumberColumn("DCR%", format="%.2f"),
+                        "pod_pct":      st.column_config.NumberColumn("POD%", format="%.2f"),
+                        "cc_pct":       st.column_config.NumberColumn("CC%", format="%.2f"),
+                        "detalles":     st.column_config.TextColumn("Detalles", width="large"),
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                    height=450,
+                )
 
             else:
                 st.info("👆 Aplica filtros y pulsa Buscar.")
@@ -2878,7 +2893,7 @@ if tab_admin:
                         st.error("❌ Las contraseñas no coinciden")
                     elif len(new_password) < 8:
                         st.error("❌ Mínimo 8 caracteres")
-                    elif not new_role in ['jt', 'admin', 'superadmin']:
+                    elif new_role not in ['jt', 'admin', 'superadmin']:
                         st.error("❌ Rol inválido")
                     else:
                         try:
@@ -3324,6 +3339,10 @@ if tab_admin:
                     else:
                         st.error("Completa ambos campos")
 
+        with col3:
+            st.markdown("#### ⚙️ Mantenimiento")
+            st.markdown("")
+
         with col4:
             st.markdown("#### ⚠️ Zona de Peligro")
             with st.expander("🗑️ Borrar TODO el historial"):
@@ -3338,9 +3357,8 @@ if tab_admin:
                         st.success("✅ Base de datos limpiada")
                         st.rerun()  # Refresca UI tras reset de BD
 
+        # (col3 contenido continúa abajo)
         with col3:
-            st.markdown("---")
-            st.markdown("#### ⚙️ Mantenimiento")
             if st.button("🧹 Ejecutar mantenimiento BD",
                          help="Normaliza semanas y elimina duplicados físicos. Puede tardar unos segundos.",
                          use_container_width=True):
@@ -3404,6 +3422,7 @@ if tab_admin:
                     'target_rts': new_rts,
                     'target_cdf': new_cdf,
                 }, db_config=db_config)
+                cached_center_targets.clear()
                 st.success(f"✅ Targets de {sel_target_center} guardados")
         else:
             st.info("Procesa al menos un scorecard primero para configurar targets.")
@@ -3416,7 +3435,7 @@ st.markdown("---")
 st.markdown("""
 <div style='display:flex;justify-content:space-between;align-items:center;
             color:#6c757d;font-size:0.8em'>
-    <span>🛡️ Winiw Quality Scorecard v3.7 · Amazon DSP</span>
+    <span>🛡️ Winiw Quality Scorecard v3.9 · Amazon DSP</span>
     <span>Supabase guarda todo · Streamlit optimiza los recursos</span>
     <span>🏆 Lideres en calidad</span>
 </div>
