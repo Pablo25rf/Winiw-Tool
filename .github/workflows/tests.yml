@@ -29,7 +29,7 @@ jobs:
         run: |
           python -m py_compile app.py
           python -m py_compile amazon_scorecard_ultra_robust_v3_FINAL.py
-          python -m py_compile test_scorecard_v37.py
+          python -m py_compile test_scorecard_v39.py
           echo "✅ Syntax OK"
 
       - name: Lint critico (ruff)
@@ -43,7 +43,7 @@ jobs:
         env:
           WINIW_ADMIN_USER: test_admin
           WINIW_ADMIN_PASS: Test_Pass_Seguro_2024!
-        run: python -m unittest test_scorecard_v37 -v
+        run: python -m unittest test_scorecard_v39 -v
 
       - name: Upload logs on failure
         if: failure()

@@ -1,10 +1,10 @@
 """
-Amazon Quality Scorecard Engine v3.7
-=====================================
+Amazon Quality Scorecard Engine
+================================
 Sistema de procesamiento y análisis de métricas de calidad para conductores Amazon.
 Soporta PostgreSQL y SQLite con auto-migraciones y validaciones robustas.
 
-Versión: 3.7
+Versión: 3.0
 Fecha: Febrero 2026
 """
 
@@ -13,58 +13,35 @@ import numpy as np
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
-from openpyxl.formatting.rule import ColorScaleRule
+from openpyxl.formatting.rule import ColorScaleRule, CellIsRule, FormulaRule
 import warnings
 import logging
 from typing import Dict, List, Tuple, Optional
-from contextlib import contextmanager
 import re
 import os
 import sqlite3
 import io
-import hashlib
 HAS_POSTGRES = False
 try:
     import psycopg2
     from psycopg2 import sql
-    from psycopg2 import pool as pg_pool
     HAS_POSTGRES = True
-except ImportError:
-    pass  # psycopg2 no instalado — modo SQLite activo
+except Exception:
+    pass
 
-# ── Pool de conexiones PostgreSQL (reutiliza conexiones entre queries) ────────
-_PG_POOL: "pg_pool.ThreadedConnectionPool | None" = None
-
-def _get_pg_pool(db_config: dict):
-    """
-    Devuelve (o crea) un ThreadedConnectionPool para Supabase.
-    minconn=1, maxconn=5 — apropiado para 10-30 usuarios con Streamlit Cloud.
-    """
-    global _PG_POOL
-    if _PG_POOL is None or _PG_POOL.closed:
-        _PG_POOL = pg_pool.ThreadedConnectionPool(
-            minconn=1, maxconn=5,
-            host=db_config.get('host', 'localhost'),
-            database=db_config.get('database', 'postgres'),
-            user=db_config.get('user', 'postgres'),
-            password=db_config.get('password', ''),
-            port=db_config.get('port', 5432),
-            connect_timeout=10,
-        )
-    return _PG_POOL
 HAS_BCRYPT = False
 try:
     import bcrypt
     HAS_BCRYPT = True
 except Exception:
-    pass  # bcrypt no instalado — se usará SHA-256 como fallback
+    pass
 
 HAS_PDFPLUMBER = False
 try:
     import pdfplumber
     HAS_PDFPLUMBER = True
 except Exception:
-    pass  # pdfplumber no instalado — lectura de PDF desactivada
+    pass
 
 from datetime import datetime, timedelta
 
@@ -84,19 +61,10 @@ class Config:
     MAX_DNR = 500  # Aumentado para evitar caps en datos históricos acumulados
     MAX_FALSE_SCAN = 2000  # Aumentado
     MAX_CONDUCTORES = 5000  # Máximo conductores esperados
-    # Targets por defecto — I-07: fuente única de verdad
-    DEFAULT_TARGETS = {
-        'target_dnr': 0.5, 'target_dcr': 0.995, 'target_pod': 0.99,
-        'target_cc': 0.99, 'target_fdps': 0.98, 'target_rts': 0.01, 'target_cdf': 0.95
-    }
     
     # Nombres de archivos esperados (patrones)
-    # DSC-Concessions debe verificarse ANTES que Concessions (tiene prioridad)
-    PATTERN_DSC_CONCESSIONS = r'.*dsc.*concessions.*\.(csv|xlsx)'
-    PATTERN_CONCESSIONS     = r'(?!.*dsc).*concessions.*\.(csv|xlsx)'  # excluye DSC
-    # Detecta: quality_overview, Amazon_Quality_Scorecard, quality-report, etc.
-    # Excluye: POD-Quality (que es un PDF de otro tipo)
-    PATTERN_QUALITY = r'.*quality.*(overview|scorecard|report).*\.(csv|xlsx)'
+    PATTERN_CONCESSIONS = r'.*concessions.*\.(csv|xlsx)' # Incluye DSC-concessions
+    PATTERN_QUALITY = r'.*quality.*overview.*\.(csv|xlsx)'
     PATTERN_FALSE_SCAN = r'.*false.*scan.*\.html'
     PATTERN_DWC = r'.*(dwc|iadc).*\.(csv|html)'
     PATTERN_FDPS = r'.*fdps.*\.(xlsx|csv)'
@@ -107,7 +75,7 @@ class Config:
     REQUIRED_CONCESSIONS = ['Nombre del agente de entrega', 'ID de agente de entrega', 
                            'Paquetes entregados no recibidos (DNR)']
     REQUIRED_QUALITY = ['ID del transportista', 'DCR']
-
+    
     # Valores por defecto
     DEFAULT_DNR = 0
     DEFAULT_FS = 0
@@ -199,6 +167,8 @@ def validate_dataframe(df: pd.DataFrame, required_cols: List[str],
         return False, f"{name} le faltan columnas: {', '.join(missing_cols)}"
     
     return True, "OK"
+
+import io
 
 def read_csv_safe(filepath_or_buffer, encoding: str = 'utf-8') -> Optional[pd.DataFrame]:
     """Lee CSV con manejo robusto de encoding (soporta paths o buffers)"""
@@ -320,7 +290,7 @@ def read_excel_safe(filepath_or_buffer) -> Optional[pd.DataFrame]:
                     if has_id and has_metrics:
                         logger.info(f"✓ Header detectado en hoja '{sheet}', fila {skip}")
                         return df
-                except Exception:
+                except:
                     continue
         return None
     except Exception as e:
@@ -607,7 +577,6 @@ def process_dwc(df: pd.DataFrame) -> pd.DataFrame:
     
     # 2. Buscar eventos de riesgo DNR (Formato antiguo)
     dnr_risk_events = pd.Series(0.0, index=df.index)
-    risk_group = None  # inicialización explícita — I-02 fix
     if 'Type' in df.columns and 'Total' in df.columns:
         # Filtrar solo filas con DNR Risk
         dnr_mask = df['Type'].str.contains('DNR Risk', case=False, na=False)
@@ -636,7 +605,7 @@ def process_dwc(df: pd.DataFrame) -> pd.DataFrame:
         
     res = pd.DataFrame({'ID': df['ID']})
     
-    if risk_group is not None:
+    if 'risk_group' in locals():
         res = res.merge(risk_group.reset_index().rename(columns={'Total': 'DNR_RISK_EVENTS'}), on='ID', how='left')
     else:
         res['DNR_RISK_EVENTS'] = dnr_risk_events
@@ -853,8 +822,11 @@ def calculate_score_v3_robust(row: pd.Series, targets: Optional[Dict] = None) ->
     Sistema de scoring V3 con validaciones robustas
     Usa targets dinámicos si se proporcionan
     """
-    # Targets por defecto desde Config (fuente única de verdad)
-    t = dict(Config.DEFAULT_TARGETS)
+    # Targets por defecto si no hay externos
+    t = {
+        'target_dnr': 0.5, 'target_dcr': 0.995, 'target_pod': 0.99,
+        'target_cc': 0.99, 'target_fdps': 0.98, 'target_rts': 0.01, 'target_cdf': 0.95
+    }
     if targets:
         t.update(targets)
     
@@ -993,23 +965,15 @@ def extract_info_from_path(path: str) -> Tuple[str, str]:
                 dt_shifted = dt + timedelta(days=1)
                 isoyear, isoweek, isoday = dt_shifted.isocalendar()
                 week = f"W{isoweek:02d}"
-            except (ValueError, TypeError, AttributeError):
-                pass  # Fecha inválida — continuar con otros patrones
+            except:
+                pass
         
         if week == "N/A":
-            # Formato YYYY-MM: tratar como 1er día del mes y convertir a semana ISO
-            # Evita interpretar "05" como W05 cuando es mes 5 (≈ W18-W22)
-            date_month_match = re.search(r'(202\d)[_-](\d{1,2})(?!\d)', filename)
-            if date_month_match:
-                try:
-                    _yr  = int(date_month_match.group(1))
-                    _mo  = int(date_month_match.group(2))
-                    if 1 <= _mo <= 12:
-                        _dt = datetime(_yr, _mo, 1)
-                        _, _isow, _ = _dt.isocalendar()
-                        week = f"W{_isow:02d}"
-                except (ValueError, TypeError):
-                    pass
+            # Formato 2026-05 (donde 05 es la semana)
+            date_week_match = re.search(r'202\d[_-](\d{1,2})', filename)
+            if date_week_match:
+                num = int(date_week_match.group(1))
+                week = f"W{num:02d}"
     
     # 2. Normalizar Centro (ej: DIC1, VLC1, MAD1, DMA3, ES-TDSL-DIC1)
     # Busca 3-4 letras seguidas de un número
@@ -1278,14 +1242,16 @@ def create_professional_excel(df: pd.DataFrame, output_path: str,
 def delete_scorecard_batch(week: str, center: str, db_config: Optional[Dict] = None) -> bool:
     """Elimina los datos de una semana y centro específicos (Para corregir errores de volcado)"""
     try:
-        with db_connection(db_config) as conn:
-            cursor = conn.cursor()
-            q = ("DELETE FROM scorecards WHERE semana = %s AND centro = %s"
-                 if db_config and db_config.get('type') == 'postgresql'
-                 else "DELETE FROM scorecards WHERE semana = ? AND centro = ?")
-            cursor.execute(q, (week, center))
-            rows = cursor.rowcount
-            conn.commit()
+        conn = get_db_connection(db_config)
+        cursor = conn.cursor()
+        
+        q = "DELETE FROM scorecards WHERE semana = %s AND centro = %s" if db_config and db_config.get('type') == 'postgresql' else "DELETE FROM scorecards WHERE semana = ? AND centro = ?"
+        cursor.execute(q, (week, center))
+        
+        rows = cursor.rowcount
+        conn.commit()
+        conn.close()
+        
         logger.info(f"🗑️ Se eliminaron {rows} registros previos de {center} para la semana {week}.")
         return True
     except Exception as e:
@@ -1299,12 +1265,10 @@ def find_file_in_dir(pattern: str, directory: str) -> Optional[str]:
             return os.path.join(directory, file)
     return None
 
-def process_single_batch(path_concessions, path_quality=None, path_false_scan=None,
-                         path_dwc=None, path_fdps=None, path_daily=None,
-                         path_dsc_concessions=None, targets=None) -> Optional[pd.DataFrame]:
-    """Procesa un único lote de archivos y devuelve el DataFrame final.
-    Soporta rutas individuales o listas de rutas/buffers.
-    path_dsc_concessions: archivo DSC-Concessions (se excluye del cálculo DNR de conductores)."""
+def process_single_batch(path_concessions, path_quality=None, path_false_scan=None, 
+                         path_dwc=None, path_fdps=None, path_daily=None, targets=None) -> Optional[pd.DataFrame]:
+    """Procesa un único lote de archivos y devuelve el DataFrame final. 
+    Soporta rutas individuales o listas de rutas/buffers."""
     try:
         # Función auxiliar para leer uno o varios archivos y concatenarlos
         def read_multiple(paths):
@@ -1326,11 +1290,6 @@ def process_single_batch(path_concessions, path_quality=None, path_false_scan=No
         df_dwc = read_multiple(path_dwc)
         df_fdps = read_multiple(path_fdps)
         df_daily_raw = read_multiple(path_daily)
-
-        # DSC-Concessions: se lee y se registra como info, NO entra en el cálculo de DNR
-        df_dsc = read_multiple(path_dsc_concessions)
-        if df_dsc is not None and not df_dsc.empty:
-            logger.info(f"DSC-Concessions detectado ({len(df_dsc)} filas) — excluido del cálculo DNR de conductores")
         
         if df_concessions is None or df_concessions.empty:
             logger.error("No se pudo leer el archivo de Concessions (obligatorio)")
@@ -1382,56 +1341,23 @@ def get_db_connection(db_config: Optional[Dict] = None):
     if db_config and db_config.get('type') == 'postgresql':
         if not HAS_POSTGRES:
             raise ImportError("Librería 'psycopg2' no encontrada. Instálala con: pip install psycopg2-binary")
-        # Usar pool — reutiliza conexiones en vez de abrir una nueva cada vez
-        try:
-            _pool = _get_pg_pool(db_config)
-            return _pool.getconn()
-        except Exception:
-            # Fallback a conexión directa si el pool falla
-            return psycopg2.connect(
-                host=db_config.get('host', 'localhost'),
-                database=db_config.get('database', 'postgres'),
-                user=db_config.get('user', 'postgres'),
-                password=db_config.get('password', ''),
-                port=db_config.get('port', 5432),
-                connect_timeout=10,
-            )
+        
+        return psycopg2.connect(
+            host=db_config.get('host', 'localhost'),
+            database=db_config.get('database', 'postgres'),
+            user=db_config.get('user', 'postgres'),
+            password=db_config.get('password', ''),
+            port=db_config.get('port', 5432)
+        )
     else:
-        if db_config and db_config.get('path'):
-            db_path = db_config['path']
-        else:
-            db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "amazon_quality.db")
+        # Por defecto SQLite
+        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "amazon_quality.db")
         conn = sqlite3.connect(db_path)
+        # Habilitar acceso por nombre de columna en sqlite
         conn.row_factory = sqlite3.Row
         return conn
 
-
-@contextmanager
-def db_connection(db_config: Optional[Dict] = None):
-    """
-    Context manager para conexiones a BD.
-    Para PostgreSQL: devuelve la conexión al pool al terminar (no la cierra).
-    Para SQLite: cierra la conexión al terminar.
-    """
-    conn = get_db_connection(db_config)
-    is_pg = db_config and db_config.get('type') == 'postgresql'
-    try:
-        yield conn
-    except Exception:
-        try:
-            conn.rollback()
-        except Exception as _e:
-            logger.debug(f"db_connection rollback: {_e}")
-        raise
-    finally:
-        try:
-            if is_pg and _PG_POOL and not _PG_POOL.closed:
-                _PG_POOL.putconn(conn)   # devolver al pool, no cerrar
-            else:
-                conn.close()
-        except Exception as _e:
-            logger.debug(f"db_connection finally: {_e}")
-
+import hashlib
 
 def hash_password(password: str) -> str:
     """
@@ -1495,27 +1421,8 @@ def verify_password(password: str, hashed: str) -> bool:
         logger.error(f"Error verificando contraseña: {e}")
         return False
 
-
-def update_user_password(username: str, new_hash: str, db_config: dict) -> bool:
-    """Actualiza el hash de contraseña y limpia must_change_password (primer login obligatorio)."""
-    try:
-        with db_connection(db_config) as conn:
-            cursor = conn.cursor()
-            q = ("UPDATE users SET password = %s, must_change_password = 0 WHERE username = %s"
-                 if db_config.get('type') == 'postgresql' else
-                 "UPDATE users SET password = ?, must_change_password = 0 WHERE username = ?")
-            cursor.execute(q, (new_hash, username))
-            conn.commit()
-        return True
-    except Exception as e:
-        logger.warning(f"update_user_password error: {e}")
-        return False
-
-
-
 def init_database(db_config: Optional[Dict] = None):
     """Inicializa las tablas optimizadas para producción en PostgreSQL o SQLite"""
-    conn = None
     try:
         conn = get_db_connection(db_config)
         cursor = conn.cursor()
@@ -1549,8 +1456,7 @@ def init_database(db_config: Optional[Dict] = None):
                     UNIQUE(semana, centro, driver_id)
                 )
             ''')
-            # Índices PostgreSQL — algunos nombres coinciden con SQLite (if/else separados, no hay duplicado real)
-            # PG: soporta INCLUDE (covering), WHERE parcial, LOWER() funcional. SQLite: sintaxis básica.
+            # Índices PostgreSQL — cubren todos los patrones de acceso habituales
             pg_indexes = [
                 # Filtro principal app: centro + semana
                 "CREATE INDEX IF NOT EXISTS idx_centro_semana       ON scorecards (centro, semana)",
@@ -1571,8 +1477,6 @@ def init_database(db_config: Optional[Dict] = None):
                 "CREATE INDEX IF NOT EXISTS idx_dnr_alto            ON scorecards (centro, semana, dnr) WHERE dnr > 5",
                 # Índice parcial: bajo rendimiento
                 "CREATE INDEX IF NOT EXISTS idx_poor_fair           ON scorecards (centro, semana, score) WHERE score < 70",
-                "CREATE INDEX IF NOT EXISTS idx_timestamp_desc      ON scorecards (timestamp DESC)",
-                "CREATE INDEX IF NOT EXISTS idx_semana_timestamp    ON scorecards (semana, timestamp DESC)",
             ]
             for idx_sql in pg_indexes:
                 try:
@@ -1593,7 +1497,6 @@ def init_database(db_config: Optional[Dict] = None):
                 )
             ''')
             # Índices SQLite — sintaxis simplificada (no soporta INCLUDE ni WHERE en todos los casos)
-            # Los nombres comunes con PG son intencionales (mismas tablas, mismos accesos)
             sqlite_indexes = [
                 "CREATE INDEX IF NOT EXISTS idx_centro_semana  ON scorecards (centro, semana)",
                 "CREATE INDEX IF NOT EXISTS idx_fecha_desc     ON scorecards (fecha_semana DESC)",
@@ -1618,8 +1521,7 @@ def init_database(db_config: Optional[Dict] = None):
                 password TEXT,
                 role VARCHAR(20),
                 active INTEGER DEFAULT 1,
-                must_change_password INTEGER DEFAULT 0,
-                centro_asignado VARCHAR(100) DEFAULT NULL
+                must_change_password INTEGER DEFAULT 0
             )
         ''')
         # Índices de usuarios (se crean AQUÍ, después de que la tabla existe)
@@ -1671,24 +1573,17 @@ def init_database(db_config: Optional[Dict] = None):
             except Exception as e:
                 logger.warning(f"Aviso migración columna {col_name}: {e}")
         
-        # Auto-Migración tabla users: Añadir columnas nuevas si no existen
-        user_cols_to_add = [
-            ("must_change_password", "INTEGER DEFAULT 0"),
-            ("centro_asignado",      "VARCHAR(100) DEFAULT NULL" if is_postgres else "TEXT DEFAULT NULL"),
-        ]
-        for _ucol, _utype in user_cols_to_add:
-            try:
-                if is_postgres:
-                    cursor.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {_ucol} {_utype}")
-                else:
-                    cursor.execute("PRAGMA table_info(users)")
-                    existing_user_cols = [c[1] for c in cursor.fetchall()]
-                    if _ucol not in existing_user_cols:
-                        cursor.execute(f"ALTER TABLE users ADD COLUMN {_ucol} {_utype}")
-            except Exception as _ue:
-                logger.warning(f"Migración users col {_ucol}: {_ue}")
-
-
+        # Auto-Migración tabla users: Añadir must_change_password
+        try:
+            if is_postgres:
+                cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password INTEGER DEFAULT 0")
+            else:
+                cursor.execute("PRAGMA table_info(users)")
+                existing_user_cols = [c[1] for c in cursor.fetchall()]
+                if "must_change_password" not in existing_user_cols:
+                    cursor.execute("ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0")
+        except Exception as e:
+            logger.warning(f"Aviso migración columna must_change_password: {e}")
 
         # ── TABLAS NUEVAS v3.2: station_scorecards y wh_exceptions ────────────
         # 4. station_scorecards
@@ -1802,154 +1697,35 @@ def init_database(db_config: Optional[Dict] = None):
             except Exception as e:
                 logger.warning(f"Migración v3.2 col {col_name}: {e}")
 
-        # ── 6. Tabla de Rate Limiting persistente (v3.5) ────────────────────
-        # Necesaria para que el bloqueo de login sobreviva reinicios del servidor
-        # y funcione correctamente en entornos multi-worker (Streamlit Cloud).
-        la_pk  = "SERIAL PRIMARY KEY" if is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
-        la_str = "VARCHAR(100)" if is_postgres else "TEXT"
-        cursor.execute(f"""
-            CREATE TABLE IF NOT EXISTS login_attempts (
-                id {la_pk},
-                username {la_str} UNIQUE NOT NULL,
-                attempt_count INTEGER DEFAULT 0,
-                locked_until TIMESTAMP,
-                last_attempt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        try:
-            if is_postgres:
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_la_username ON login_attempts (LOWER(username))")
-            else:
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_la_username ON login_attempts (username)")
-        except Exception as _e:
-            logger.debug(f"init_database non-critical: {_e}")
-            pass
-
-        # Asegurar que el usuario superadmin inicial existe — configurable por env vars
-        import os as _os
-        _default_user = _os.environ.get("WINIW_ADMIN_USER", "pablo")
-        _default_pw   = _os.environ.get("WINIW_ADMIN_PASS", "Admin_Winiw_2026")
+        # Asegurar que el usuario 'pablo' existe como SUPERADMIN
         q_check = "SELECT id FROM users WHERE LOWER(username) = %s" if is_postgres else "SELECT id FROM users WHERE LOWER(username) = ?"
-        cursor.execute(q_check, (_default_user.lower(),))
+        cursor.execute(q_check, ("pablo",))
         if not cursor.fetchone():
-            admin_pass = hash_password(_default_pw)
+            admin_pass = hash_password("Admin_Winiw_2026")
             q_ins = "INSERT INTO users (username, password, role, must_change_password) VALUES (%s, %s, %s, %s)" if is_postgres else "INSERT INTO users (username, password, role, must_change_password) VALUES (?, ?, ?, ?)"
-            cursor.execute(q_ins, (_default_user, admin_pass, "superadmin", 1))
-            logger.info(f"Usuario '{_default_user}' creado como SUPERADMIN (requiere cambio de contraseña).")
+            cursor.execute(q_ins, ("pablo", admin_pass, "superadmin", 1))
+            logger.info("Usuario 'pablo' creado como SUPERADMIN (requiere cambio de contraseña).")
+        else:
+            # Actualizar pablo a superadmin si ya existe pero es admin
+            q_update = "UPDATE users SET role = %s WHERE LOWER(username) = %s" if is_postgres else "UPDATE users SET role = ? WHERE LOWER(username) = ?"
+            cursor.execute(q_update, ("superadmin", "pablo"))
+            logger.info("Usuario 'pablo' actualizado a SUPERADMIN.")
         
         conn.commit()
+        conn.close()
         return True
     except Exception as e:
         logger.error(f"Error DB: {e}")
         return False
-    finally:
-        try:
-            if conn:
-                _is_pg = db_config and db_config.get('type') == 'postgresql'
-                if _is_pg and _PG_POOL and not _PG_POOL.closed:
-                    _PG_POOL.putconn(conn)  # devolver al pool, no cerrar permanentemente
-                else:
-                    conn.close()
-        except Exception:
-            pass
-
-
-# ═══════════════════════════════════════════════════════════════
-# RATE LIMITING PERSISTENTE (Supabase/SQLite-compatible)
-# ═══════════════════════════════════════════════════════════════
-# Persiste entre workers de Streamlit Cloud y entre reinicios del servidor.
-# Usa la tabla `login_attempts` (creada en init_database).
-
-def record_login_attempt(username: str, success: bool, db_config: Optional[Dict] = None,
-                          max_attempts: int = 5, lockout_minutes: int = 15) -> None:
-    """
-    Registra un intento de login (exitoso o fallido).
-    - Si es exitoso, limpia los contadores del usuario.
-    - Si es fallido, incrementa el contador y bloquea si se supera max_attempts.
-    """
-    try:
-        with db_connection(db_config) as conn:
-            cursor = conn.cursor()
-            is_pg  = db_config and db_config.get('type') == 'postgresql'
-            ph     = '%s' if is_pg else '?'
-            now    = datetime.now()
-
-            if success:
-                cursor.execute(
-                    f"DELETE FROM login_attempts WHERE LOWER(username) = {ph}",
-                    (username.lower(),)
-                )
-            else:
-                cursor.execute(
-                    f"SELECT attempt_count FROM login_attempts WHERE LOWER(username) = {ph}",
-                    (username.lower(),)
-                )
-                row = cursor.fetchone()
-                new_count = (row[0] + 1) if row else 1
-                locked_until = None
-                if new_count >= max_attempts:
-                    locked_until = (now + timedelta(minutes=lockout_minutes)).strftime("%Y-%m-%d %H:%M:%S")
-
-                if is_pg:
-                    cursor.execute(
-                        """INSERT INTO login_attempts (username, attempt_count, locked_until, last_attempt)
-                           VALUES (%s, %s, %s, %s)
-                           ON CONFLICT (username) DO UPDATE SET
-                               attempt_count = EXCLUDED.attempt_count,
-                               locked_until  = EXCLUDED.locked_until,
-                               last_attempt  = EXCLUDED.last_attempt""",
-                        (username.lower(), new_count, locked_until, now.strftime("%Y-%m-%d %H:%M:%S"))
-                    )
-                else:
-                    cursor.execute(
-                        """INSERT OR REPLACE INTO login_attempts
-                           (username, attempt_count, locked_until, last_attempt)
-                           VALUES (?, ?, ?, ?)""",
-                        (username.lower(), new_count, locked_until, now.strftime("%Y-%m-%d %H:%M:%S"))
-                    )
-            conn.commit()
-    except Exception as e:
-        logger.error(f"record_login_attempt error: {e}")
-
-
-def check_login_locked(username: str, db_config: Optional[Dict] = None) -> Tuple[bool, int]:
-    """
-    Comprueba si un usuario está bloqueado.
-    Returns: (bloqueado: bool, segundos_restantes: int)
-    """
-    try:
-        with db_connection(db_config) as conn:
-            cursor = conn.cursor()
-            is_pg  = db_config and db_config.get('type') == 'postgresql'
-            ph     = '%s' if is_pg else '?'
-            cursor.execute(
-                f"SELECT locked_until FROM login_attempts WHERE LOWER(username) = {ph}",
-                (username.lower(),)
-            )
-            row = cursor.fetchone()
-
-        if not row or not row[0]:
-            return False, 0
-        locked_until = datetime.strptime(str(row[0])[:19], "%Y-%m-%d %H:%M:%S")
-        if datetime.now() < locked_until:
-            remaining = int((locked_until - datetime.now()).total_seconds())
-            return True, remaining
-        return False, 0
-    except Exception as e:
-        logger.error(f"check_login_locked error: {e}")
-        return False, 0
 
 def reset_production_database(db_config: Optional[Dict] = None):
     """Limpia todos los datos de scorecards para empezar de cero (Mantiene usuarios y targets)"""
     try:
-        with db_connection(db_config) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "TRUNCATE TABLE scorecards RESTART IDENTITY"
-                if db_config and db_config.get('type') == 'postgresql'
-                else "DELETE FROM scorecards"
-            )
-            conn.commit()
+        conn = get_db_connection(db_config)
+        cursor = conn.cursor()
+        cursor.execute("TRUNCATE TABLE scorecards RESTART IDENTITY" if db_config and db_config.get('type') == 'postgresql' else "DELETE FROM scorecards")
+        conn.commit()
+        conn.close()
         return True
     except Exception as e:
         logger.error(f"Error reset: {e}")
@@ -1959,6 +1735,8 @@ def reset_production_database(db_config: Optional[Dict] = None):
 def week_to_date(week_str: str, year: int = None) -> str:
     """Convierte un string de semana 'W05' a la fecha del lunes de esa semana"""
     try:
+        if year is None:
+            year = datetime.now().year  # Año dinámico, nunca hardcodeado
         if not week_str or week_str == "N/A":
             return datetime.now().strftime("%Y-%m-%d")
         
@@ -1968,161 +1746,123 @@ def week_to_date(week_str: str, year: int = None) -> str:
             return datetime.now().strftime("%Y-%m-%d")
             
         week_num = int(match.group(1))
-
-        if year is None:
-            now = datetime.now()
-            year = now.year
-            # Heurística de cruce de año: si estamos en enero/febrero (semanas 1-8)
-            # y nos piden una semana alta (>45), es del año anterior.
-            # Si estamos en noviembre/diciembre (semanas >45) y nos piden semana baja (<8),
-            # es del año siguiente.
-            if now.month <= 2 and week_num > 45:
-                year -= 1
-            elif now.month >= 11 and week_num < 8:
-                year += 1
-
         # Cálculo ISO: 4 de enero es siempre semana 1
         d = datetime(year, 1, 4)
         # Retroceder al lunes de esa semana y saltar X semanas
         start_date = d - timedelta(days=d.weekday()) + timedelta(weeks=week_num-1)
         return start_date.strftime("%Y-%m-%d")
-    except (ValueError, TypeError, AttributeError):
+    except:
         return datetime.now().strftime("%Y-%m-%d")
 
 def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Optional[Dict] = None, uploaded_by: str = "System", clean_first: bool = True) -> bool:
     """Guarda o actualiza los datos en la base de datos (SQLite o PostgreSQL)"""
     try:
-        # Normalizar semana: W5 → W05, W9 → W09 (evita inconsistencias en ORDER BY y filtros)
-        if week and week.startswith('W') and len(week) < 4:
-            try:
-                week = f"W{int(week[1:]):02d}"
-            except ValueError:
-                pass
-
+        init_database(db_config)
+        
+        # LIMPIEZA PREVIA: Si vamos a volcar un lote, es mejor limpiar lo que hubiera antes
+        # para ese centro y semana, garantizando que el DB sea fiel al último archivo.
         if clean_first:
             delete_scorecard_batch(week, center, db_config)
-
+            
+        conn = get_db_connection(db_config)
+        cursor = conn.cursor()
+        
         is_postgres = db_config and db_config.get('type') == 'postgresql'
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         date_week = week_to_date(week)
-
+        
         cols = [
             "semana", "fecha_semana", "centro", "driver_id", "driver_name", "calificacion", "score",
             "entregados", "dnr", "fs_count", "dnr_risk_events", "dcr", "pod", "cc",
             "fdps", "rts", "cdf", "detalles", "uploaded_by", "timestamp"
         ]
-
+        
+        # SQLite usa ?, PostgreSQL usa %s
         placeholder = "%s" if is_postgres else "?"
         placeholders = ", ".join([placeholder] * len(cols))
-
-        def _safe_float(v, default=0.0):
-            try: return float(v) if v is not None and str(v) not in ('nan','None','') else default
-            except (ValueError, TypeError): return default
-
-        all_vals = [
-            (
-                week, date_week, center,
-                str(row['ID']), str(row['Nombre']),
-                str(row['CALIFICACION']), _safe_float(row['SCORE']),
-                _safe_float(row['Entregados']), _safe_float(row['DNR']),
-                _safe_float(row['FS_Count']), _safe_float(row['DNR_RISK_EVENTS']),
-                _safe_float(row['DCR']), _safe_float(row['POD']),
-                _safe_float(row['CC']), _safe_float(row['FDPS']),
-                _safe_float(row['RTS']), _safe_float(row['CDF']),
-                str(row['DETALLES']), uploaded_by, ts
+        
+        for _, row in df.iterrows():
+            vals = (
+                week, date_week, center, str(row['ID']), str(row['Nombre']), 
+                str(row['CALIFICACION']), float(row['SCORE']),
+                float(row['Entregados']), float(row['DNR']), float(row['FS_Count']),
+                float(row['DNR_RISK_EVENTS']), float(row['DCR']), float(row['POD']),
+                float(row['CC']), float(row['FDPS']), float(row['RTS']), 
+                float(row['CDF']), str(row['DETALLES']), uploaded_by, ts
             )
-            for _, row in df.iterrows()
-        ]
-
-        with db_connection(db_config) as conn:
-            cursor = conn.cursor()
+            
             if is_postgres:
+                # PostgreSQL ON CONFLICT
                 query = f"""
                     INSERT INTO scorecards ({', '.join(cols)})
                     VALUES ({placeholders})
-                    ON CONFLICT (semana, centro, driver_id)
-                    DO UPDATE SET
-                        fecha_semana    = EXCLUDED.fecha_semana,
-                        calificacion    = EXCLUDED.calificacion,
-                        score           = EXCLUDED.score,
-                        entregados      = EXCLUDED.entregados,
-                        dnr             = EXCLUDED.dnr,
-                        fs_count        = EXCLUDED.fs_count,
+                    ON CONFLICT (semana, centro, driver_id) 
+                    DO UPDATE SET 
+                        fecha_semana = EXCLUDED.fecha_semana,
+                        calificacion = EXCLUDED.calificacion,
+                        score = EXCLUDED.score,
+                        entregados = EXCLUDED.entregados,
+                        dnr = EXCLUDED.dnr,
+                        fs_count = EXCLUDED.fs_count,
                         dnr_risk_events = EXCLUDED.dnr_risk_events,
-                        dcr             = EXCLUDED.dcr,
-                        pod             = EXCLUDED.pod,
-                        cc              = EXCLUDED.cc,
-                        fdps            = EXCLUDED.fdps,
-                        rts             = EXCLUDED.rts,
-                        cdf             = EXCLUDED.cdf,
-                        detalles        = EXCLUDED.detalles,
-                        uploaded_by     = EXCLUDED.uploaded_by,
-                        timestamp       = EXCLUDED.timestamp
+                        dcr = EXCLUDED.dcr,
+                        pod = EXCLUDED.pod,
+                        cc = EXCLUDED.cc,
+                        fdps = EXCLUDED.fdps,
+                        rts = EXCLUDED.rts,
+                        cdf = EXCLUDED.cdf,
+                        detalles = EXCLUDED.detalles,
+                        uploaded_by = EXCLUDED.uploaded_by,
+                        timestamp = EXCLUDED.timestamp
                 """
-                cursor.executemany(query, all_vals)
+                cursor.execute(query, vals)
             else:
+                # SQLite INSERT OR REPLACE
                 query = f"INSERT OR REPLACE INTO scorecards ({', '.join(cols)}) VALUES ({placeholders})"
-                cursor.executemany(query, all_vals)
-            conn.commit()
+                cursor.execute(query, vals)
+            
+        conn.commit()
+        
+        # Crear vistas dinámicas por centro (Solo para PostgreSQL por organización)
+        if is_postgres:
+            try:
+                # Obtener centros únicos
+                cursor.execute("SELECT DISTINCT centro FROM scorecards")
+                centros = [r[0] for r in cursor.fetchall()]
+                
+                for c in centros:
+                    # Limpiar nombre para que sea válido en SQL
+                    clean_name = "".join([char if char.isalnum() else "_" for char in c.lower()])
+                    view_name = f"v_scorecard_{clean_name}"
+                    cursor.execute(f"CREATE OR REPLACE VIEW {view_name} AS SELECT * FROM scorecards WHERE centro = '{c}'")
+                conn.commit()
+            except Exception as ve:
+                logger.warning(f"No se pudieron actualizar las vistas: {str(ve)}")
 
+        conn.close()
+        
+        # Limpieza final de duplicados físicos y normalización de semanas
+        clean_database_duplicates(db_config)
+        
         logger.info(f"✅ {len(df)} registros sincronizados con DB ({'PostgreSQL' if is_postgres else 'SQLite'})")
         return True
     except Exception as e:
         logger.error(f"Error guardando en DB: {str(e)}")
+        if 'conn' in locals(): conn.close()
         return False
-
-def refresh_center_views(db_config=None) -> int:
-    """
-    Crea/actualiza vistas PostgreSQL por centro.
-    Llamar solo desde Panel Admin — NO desde save_to_database.
-    Devuelve el número de vistas creadas/actualizadas.
-    """
-    if not (db_config and db_config.get('type') == 'postgresql'):
-        return 0
-    try:
-        with db_connection(db_config) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT DISTINCT centro FROM scorecards")
-            centros = [r[0] for r in cursor.fetchall()]
-            for c in centros:
-                clean_name = "".join(ch if ch.isalnum() else "_" for ch in c.lower())[:50]
-                view_name  = f"v_scorecard_{clean_name}"
-                cursor.execute(
-                    f'CREATE OR REPLACE VIEW {view_name} AS '
-                    f'SELECT * FROM scorecards WHERE centro = %s', (c,)
-                )
-            conn.commit()
-        logger.info(f"refresh_center_views: {len(centros)} vistas actualizadas")
-        return len(centros)
-    except Exception as e:
-        logger.warning(f"refresh_center_views error: {e}")
-        return 0
-
-
-def run_maintenance(db_config: Optional[Dict] = None) -> Tuple[bool, int]:
-    """
-    Tarea de mantenimiento periódico — llamar desde panel Admin, no en cada save.
-    1. Normaliza semanas (W5 → W05)
-    2. Elimina duplicados físicos
-    No se llama automáticamente en save_to_database() para evitar full-scan en cada guardado.
-    """
-    logger.info("⚙️ Iniciando mantenimiento de BD...")
-    ok, removed = clean_database_duplicates(db_config)
-    if ok:
-        logger.info(f"⚙️ Mantenimiento completado: {removed} duplicados eliminados.")
-    return ok, removed
-
 
 def get_center_targets(center: str, db_config: Optional[Dict] = None) -> Dict:
     """Obtiene los targets guardados para un centro o los defaults"""
     try:
-        with db_connection(db_config) as conn:
-            cursor = conn.cursor()
-            q = ("SELECT * FROM center_targets WHERE centro = %s"
-                 if db_config and db_config.get('type') == 'postgresql'
-                 else "SELECT * FROM center_targets WHERE centro = ?")
-            cursor.execute(q, (center,))
-            row = cursor.fetchone()
+        init_database(db_config)
+        conn = get_db_connection(db_config)
+        cursor = conn.cursor()
+        
+        q = "SELECT * FROM center_targets WHERE centro = %s" if db_config and db_config.get('type') == 'postgresql' else "SELECT * FROM center_targets WHERE centro = ?"
+        cursor.execute(q, (center,))
+        row = cursor.fetchone()
+        conn.close()
+        
         if row:
             if db_config and db_config.get('type') == 'postgresql':
                 return {
@@ -2130,36 +1870,43 @@ def get_center_targets(center: str, db_config: Optional[Dict] = None) -> Dict:
                     'target_pod': row[3], 'target_cc': row[4], 'target_fdps': row[5],
                     'target_rts': row[6], 'target_cdf': row[7]
                 }
-            else:
+            else: # SQLite Row
                 return dict(row)
     except Exception as e:
         logger.error(f"Error obteniendo targets: {e}")
     
-    # Defaults si no existe o hay error — I-07: fuente única en Config.DEFAULT_TARGETS
-    return {'centro': center, **Config.DEFAULT_TARGETS}
+    # Defaults si no existe o hay error
+    return {
+        'centro': center, 'target_dnr': 0.5, 'target_dcr': 0.995,
+        'target_pod': 0.99, 'target_cc': 0.99, 'target_fdps': 0.98,
+        'target_rts': 0.01, 'target_cdf': 0.95
+    }
 
 def save_center_targets(targets: Dict, db_config: Optional[Dict] = None):
     """Guarda o actualiza los targets para un centro"""
     try:
-        cols = ['centro', 'target_dnr', 'target_dcr', 'target_pod', 'target_cc',
-                'target_fdps', 'target_rts', 'target_cdf']
+        conn = get_db_connection(db_config)
+        cursor = conn.cursor()
+        is_postgres = db_config and db_config.get('type') == 'postgresql'
+        
+        cols = ['centro', 'target_dnr', 'target_dcr', 'target_pod', 'target_cc', 'target_fdps', 'target_rts', 'target_cdf']
         vals = [targets[c] for c in cols]
-        with db_connection(db_config) as conn:
-            cursor = conn.cursor()
-            is_postgres = db_config and db_config.get('type') == 'postgresql'
-            if is_postgres:
-                q = f"""
-                    INSERT INTO center_targets ({', '.join(cols)}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (centro) DO UPDATE SET
-                    target_dnr=EXCLUDED.target_dnr, target_dcr=EXCLUDED.target_dcr,
-                    target_pod=EXCLUDED.target_pod, target_cc=EXCLUDED.target_cc,
-                    target_fdps=EXCLUDED.target_fdps, target_rts=EXCLUDED.target_rts,
-                    target_cdf=EXCLUDED.target_cdf, timestamp=CURRENT_TIMESTAMP
-                """
-            else:
-                q = f"INSERT OR REPLACE INTO center_targets ({', '.join(cols)}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-            cursor.execute(q, vals)
-            conn.commit()
+        
+        if is_postgres:
+            q = f"""
+                INSERT INTO center_targets ({', '.join(cols)}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (centro) DO UPDATE SET
+                target_dnr=EXCLUDED.target_dnr, target_dcr=EXCLUDED.target_dcr, 
+                target_pod=EXCLUDED.target_pod, target_cc=EXCLUDED.target_cc,
+                target_fdps=EXCLUDED.target_fdps, target_rts=EXCLUDED.target_rts,
+                target_cdf=EXCLUDED.target_cdf, timestamp=CURRENT_TIMESTAMP
+            """
+        else:
+            q = f"INSERT OR REPLACE INTO center_targets ({', '.join(cols)}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        
+        cursor.execute(q, vals)
+        conn.commit()
+        conn.close()
         return True
     except Exception as e:
         logger.error(f"Error guardando targets: {e}")
@@ -2169,11 +1916,9 @@ def clean_database_duplicates(db_config: Optional[Dict] = None) -> Tuple[bool, i
     """
     1. Normaliza formatos de semana (ej: W5 -> W05)
     2. Elimina duplicados físicos que puedan haber quedado por versiones antiguas sin restricciones
-    Llamar desde run_maintenance() o panel Admin, NO en save_to_database().
     """
-    conn = None
     try:
-        conn = get_db_connection(db_config)  # conexión explícita: función larga con commits intermedios
+        conn = get_db_connection(db_config)
         cursor = conn.cursor()
         
         is_postgres = db_config and db_config.get('type') == 'postgresql'
@@ -2192,9 +1937,8 @@ def clean_database_duplicates(db_config: Optional[Dict] = None) -> Tuple[bool, i
                     q_upd = "UPDATE scorecards SET semana = %s WHERE id = %s" if is_postgres else "UPDATE scorecards SET semana = ? WHERE id = ?"
                     cursor.execute(q_upd, (new_sem, r_id))
                     updated += 1
-                except Exception as _dup_e:
-                    # Si falla por UNIQUE constraint, borrar el antiguo mal nombrado
-                    logger.debug(f"Semana normalización conflict id={r_id}: {_dup_e}")
+                except:
+                    # Si falla por UNIQUE, borrar el antiguo que está mal nombrado
                     q_del = "DELETE FROM scorecards WHERE id = %s" if is_postgres else "DELETE FROM scorecards WHERE id = ?"
                     cursor.execute(q_del, (r_id,))
                     updated += 1
@@ -2220,19 +1964,108 @@ def clean_database_duplicates(db_config: Optional[Dict] = None) -> Tuple[bool, i
             """)
         
         conn.commit()
+        conn.close()
         return True, updated
     except Exception as e:
-        logger.error(f"clean_database_duplicates error: {e}")
+        logger.error(f"Error limpiando DB: {str(e)}")
+        if 'conn' in locals(): conn.close()
         return False, 0
-    finally:
-        try:
-            if conn: conn.close()
-        except Exception: pass
 
-# NOTE: Procesamiento por lotes disponible en:
-#   - App Streamlit: Tab Procesamiento → Importación masiva ZIP
-#   - Directo:       process_single_batch() + save_to_database()
-# La función main() CLI fue eliminada en v3.7 (dead code).
+def main():
+    """Función principal para procesamiento por lotes (múltiples centros/semanas)"""
+    
+    print("\n" + "="*80)
+    print("AMAZON QUALITY SCORECARD - PROCESADOR MASIVO V3.0")
+    print("="*80 + "\n")
+    
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # 1. LOCALIZAR TODOS LOS ARCHIVOS DE CONCESSIONS (BASE)
+    concessions_paths = []
+    for root, dirs, files in os.walk(base_dir):
+        for file in files:
+            if re.match(Config.PATTERN_CONCESSIONS, file, re.IGNORECASE):
+                concessions_paths.append(os.path.join(root, file))
+    
+    if not concessions_paths:
+        logger.error(f"No se encontró ningún archivo de Concessions en {base_dir}")
+        return False
+    
+    logger.info(f"Se han detectado {len(concessions_paths)} lotes potenciales para procesar.\n")
+    
+    processed_count = 0
+    processed_batches = set()
+    
+    for path_concessions in concessions_paths:
+        current_dir = os.path.dirname(path_concessions)
+        week, center = extract_info_from_path(path_concessions)
+        
+        batch_key = (week, center)
+        if batch_key in processed_batches:
+            logger.info(f"Saltando {center}/{week}: Ya procesado.")
+            continue
+            
+        print(f"\n>>> PROCESANDO: Centro {center} | Semana {week}")
+        print(f"    Carpeta: {current_dir}")
+        
+        try:
+            # 2. BUSCAR ARCHIVOS COMPLEMENTARIOS EN LA MISMA CARPETA
+            path_quality = find_file_in_dir(Config.PATTERN_QUALITY, current_dir)
+            path_false_scan = find_file_in_dir(Config.PATTERN_FALSE_SCAN, current_dir)
+            path_dwc = find_file_in_dir(Config.PATTERN_DWC, current_dir)
+            path_fdps = find_file_in_dir(Config.PATTERN_FDPS, current_dir)
+            
+            # 3. LEER Y PROCESAR
+            df_concessions = read_any_safe(path_concessions, str(path_concessions))
+            df_quality = read_any_safe(path_quality, str(path_quality)) if path_quality is not None else None
+            df_false_scan_html = read_any_safe(path_false_scan, str(path_false_scan)) if path_false_scan is not None else None
+            df_dwc = read_any_safe(path_dwc, str(path_dwc)) if path_dwc is not None else None
+            df_fdps = read_any_safe(path_fdps, str(path_fdps)) if path_fdps is not None else None
+            
+            if df_concessions is None:
+                logger.error(f"Saltando lote: No se pudo leer {path_concessions}")
+                continue
+                
+            df_conc_clean = process_concessions(df_concessions)
+            
+            # Duplicados
+            if not df_conc_clean.empty and 'ID' in df_conc_clean.columns:
+                if df_conc_clean['ID'].duplicated().any():
+                    df_conc_clean = df_conc_clean.drop_duplicates(subset='ID', keep='first')
+            
+            df_qual_clean = process_quality(df_quality) if df_quality is not None else None
+            df_fs_clean = process_false_scan(df_false_scan_html) if df_false_scan_html is not None else None
+            df_dwc_clean = process_dwc(df_dwc) if df_dwc is not None else None
+            df_fdps_clean = process_fdps(df_fdps) if df_fdps is not None else None
+            
+            # 4. MERGE Y SCORING
+            df_merged = merge_data_smart(df_conc_clean, df_qual_clean, df_fs_clean, df_dwc_clean, df_fdps_clean)
+            
+            results = df_merged.apply(calculate_score_v3_robust, axis=1, result_type='expand')
+            df_merged['CALIFICACION'] = results[0]
+            df_merged['DETALLES'] = results[1]
+            df_merged['SCORE'] = results[2]
+            
+            # 5. GENERAR EXCEL Y GUARDAR EN DB
+            output_file = os.path.join(current_dir, f'Amazon_Quality_Scorecard_{center}_{week}.xlsx')
+            success_excel = create_professional_excel(df_merged, output_file, center_name=center, week=week)
+            success_db = save_to_database(df_merged, week, center)
+            
+            if success_excel:
+                processed_count += 1
+                processed_batches.add(batch_key)
+                print(f"OK: EXCEL GENERADO: {os.path.basename(output_file)}")
+            if success_db:
+                print(f"OK: DATOS SINCRONIZADOS CON BASE DE DATOS")
+            
+        except Exception as e:
+            logger.error(f"Error procesando lote {center}/{week}: {str(e)}")
+            continue
+
+    print("\n" + "="*80)
+    print(f"PROCESAMIENTO FINALIZADO: {processed_count} reportes generados exitosamente.")
+    print("="*80 + "\n")
+    return True
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2594,6 +2427,9 @@ def save_station_scorecard(station_data: dict, week: str, center: str,
     UPSERT por (semana, centro) — reemplaza si ya existe.
     """
     try:
+        init_database(db_config)
+        conn   = get_db_connection(db_config)
+        cursor = conn.cursor()
         is_pg  = db_config and db_config.get('type') == 'postgresql'
         ph     = '%s' if is_pg else '?'
         fecha  = week_to_date(week)
@@ -2656,10 +2492,9 @@ def save_station_scorecard(station_data: dict, week: str, center: str,
         else:
             query = f"INSERT OR REPLACE INTO station_scorecards ({col_list}) VALUES ({placeholders})"
 
-        with db_connection(db_config) as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, vals)
-            conn.commit()
+        cursor.execute(query, vals)
+        conn.commit()
+        conn.close()
         logger.info(f"✓ station_scorecard guardado: {center} {week} | Score: {station_data.get('overall_score')} {station_data.get('overall_standing')}")
         return True
 
@@ -2684,60 +2519,55 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
         return 0, 0
 
     try:
-        with db_connection(db_config) as conn:
-            cursor  = conn.cursor()
-            is_pg   = db_config and db_config.get('type') == 'postgresql'
-            ph      = '%s' if is_pg else '?'
+        conn    = get_db_connection(db_config)
+        cursor  = conn.cursor()
+        is_pg   = db_config and db_config.get('type') == 'postgresql'
+        ph      = '%s' if is_pg else '?'
+        updated = 0
+        not_found = []
 
-            # ── Obtener driver_ids existentes de una sola query ───────────
-            all_ids = [str(r['driver_id']) for _, r in drivers_df.iterrows()]
-            phs = ", ".join([ph] * len(all_ids))
-            cursor.execute(
-                f"SELECT driver_id FROM scorecards "
-                f"WHERE semana={ph} AND centro={ph} AND driver_id IN ({phs})",
-                [week, center] + all_ids
-            )
-            existing_ids = {row[0] for row in cursor.fetchall()}
+        for _, row in drivers_df.iterrows():
+            driver_id = row['driver_id']
 
-            not_found = [did for did in all_ids if did not in existing_ids]
+            # Verificar existencia
+            q_check = f"SELECT id FROM scorecards WHERE semana={ph} AND centro={ph} AND driver_id={ph}"
+            cursor.execute(q_check, (week, center, driver_id))
+            if not cursor.fetchone():
+                not_found.append(driver_id)
+                continue
 
-            # ── Batch UPDATE para los que sí existen ─────────────────────
-            update_vals = []
-            for _, row in drivers_df.iterrows():
-                driver_id = str(row['driver_id'])
-                if driver_id not in existing_ids:
-                    continue
-                update_vals.append((
-                    row.get('entregados_oficial'), row.get('dcr_oficial'),
-                    row.get('pod_oficial'),        row.get('cc_oficial'),
-                    row.get('dsc_dpmo'),           row.get('lor_dpmo'),
-                    row.get('ce_dpmo'),            row.get('cdf_dpmo_oficial'),
-                    week, center, driver_id
-                ))
+            # UPDATE solo columnas _oficial — nunca toca columnas base
+            q_update = f"""
+                UPDATE scorecards SET
+                    entregados_oficial = {ph},
+                    dcr_oficial        = {ph},
+                    pod_oficial        = {ph},
+                    cc_oficial         = {ph},
+                    dsc_dpmo           = {ph},
+                    lor_dpmo           = {ph},
+                    ce_dpmo            = {ph},
+                    cdf_dpmo_oficial   = {ph},
+                    pdf_loaded         = 1
+                WHERE semana={ph} AND centro={ph} AND driver_id={ph}
+            """
+            cursor.execute(q_update, (
+                row.get('entregados_oficial'),
+                row.get('dcr_oficial'),
+                row.get('pod_oficial'),
+                row.get('cc_oficial'),
+                row.get('dsc_dpmo'),
+                row.get('lor_dpmo'),
+                row.get('ce_dpmo'),
+                row.get('cdf_dpmo_oficial'),
+                week, center, driver_id
+            ))
+            updated += 1
 
-            if update_vals:
-                q_update = f"""
-                    UPDATE scorecards SET
-                        entregados_oficial = {ph},
-                        dcr_oficial        = {ph},
-                        pod_oficial        = {ph},
-                        cc_oficial         = {ph},
-                        dsc_dpmo           = {ph},
-                        lor_dpmo           = {ph},
-                        ce_dpmo            = {ph},
-                        cdf_dpmo_oficial   = {ph},
-                        pdf_loaded         = 1
-                    WHERE semana={ph} AND centro={ph} AND driver_id={ph}
-                """
-                cursor.executemany(q_update, update_vals)
-                updated = len(update_vals)
-            else:
-                updated = 0
-
-            conn.commit()
+        conn.commit()
+        conn.close()
 
         if not_found:
-            logger.warning(f"Drivers del PDF sin match ({len(not_found)}): {not_found[:5]}{'...' if len(not_found) > 5 else ''}")
+            logger.warning(f"Drivers del PDF sin match en scorecards ({len(not_found)}): {not_found[:5]}{'...' if len(not_found) > 5 else ''}")
         logger.info(f"✓ update_drivers_from_pdf: {updated} actualizados, {len(not_found)} sin match")
         return updated, len(not_found)
 
@@ -2758,35 +2588,38 @@ def save_wh_exceptions(wh_df: pd.DataFrame, week: str, center: str,
         return True
 
     try:
-        # db_connection hace rollback automático en excepciones → transacción atómica garantizada
-        with db_connection(db_config) as conn:
-            cursor = conn.cursor()
-            is_pg  = db_config and db_config.get('type') == 'postgresql'
-            ph     = '%s' if is_pg else '?'
-            fecha  = week_to_date(week)
+        conn   = get_db_connection(db_config)
+        cursor = conn.cursor()
+        is_pg  = db_config and db_config.get('type') == 'postgresql'
+        ph     = '%s' if is_pg else '?'
+        fecha  = week_to_date(week)
 
+        # Limpiar registros anteriores del mismo lote
+        cursor.execute(
+            f"DELETE FROM wh_exceptions WHERE semana={ph} AND centro={ph}",
+            (week, center)
+        )
+
+        for _, row in wh_df.iterrows():
             cursor.execute(
-                f"DELETE FROM wh_exceptions WHERE semana={ph} AND centro={ph}",
-                (week, center)
-            )
-            for _, row in wh_df.iterrows():
-                cursor.execute(
-                    f"""INSERT INTO wh_exceptions
-                        (semana, fecha_semana, centro, driver_id,
-                         daily_limit_exceeded, weekly_limit_exceeded,
-                         under_offwork_limit, workday_limit_exceeded, uploaded_by)
-                        VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})
-                    """,
-                    (
-                        week, fecha, center, row['driver_id'],
-                        int(row.get('daily_limit_exceeded', 0)),
-                        int(row.get('weekly_limit_exceeded', 0)),
-                        int(row.get('under_offwork_limit', 0)),
-                        int(row.get('workday_limit_exceeded', 0)),
-                        uploaded_by
-                    )
+                f"""INSERT INTO wh_exceptions
+                    (semana, fecha_semana, centro, driver_id,
+                     daily_limit_exceeded, weekly_limit_exceeded,
+                     under_offwork_limit, workday_limit_exceeded, uploaded_by)
+                    VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})
+                """,
+                (
+                    week, fecha, center, row['driver_id'],
+                    int(row.get('daily_limit_exceeded', 0)),
+                    int(row.get('weekly_limit_exceeded', 0)),
+                    int(row.get('under_offwork_limit', 0)),
+                    int(row.get('workday_limit_exceeded', 0)),
+                    uploaded_by
                 )
-            conn.commit()
+            )
+
+        conn.commit()
+        conn.close()
         logger.info(f"✓ WHC exceptions guardadas: {len(wh_df)} para {center} {week}")
         return True
 
@@ -2798,237 +2631,35 @@ def save_wh_exceptions(wh_df: pd.DataFrame, week: str, center: str,
 def get_station_scorecards(db_config=None) -> pd.DataFrame:
     """Devuelve todos los station_scorecards ordenados por centro y semana desc."""
     try:
-        with db_connection(db_config) as conn:
-            query = """
-                SELECT semana, centro, overall_score, overall_standing,
-                       rank_station, rank_wow,
-                       fico, fico_tier, whc_pct, whc_tier,
-                       dcr_pct, dcr_tier, dnr_dpmo, dnr_tier,
-                       lor_dpmo, lor_tier, dsc_dpmo, dsc_tier,
-                       pod_pct, pod_tier, cc_pct, cc_tier,
-                       ce_dpmo, ce_tier, cdf_dpmo, cdf_tier,
-                       speeding_rate, speeding_tier,
-                       mentor_adoption, mentor_tier,
-                       vsa_compliance, vsa_tier,
-                       boc, cas,
-                       capacity_next_day, capacity_next_day_tier,
-                       capacity_same_day, capacity_same_day_tier,
-                       safety_tier, quality_tier, capacity_tier,
-                       focus_area_1, focus_area_2, focus_area_3,
-                       uploaded_by, timestamp
-                FROM station_scorecards
-                ORDER BY centro ASC, semana DESC
-            """
-            df = pd.read_sql_query(query, conn)
+        conn   = get_db_connection(db_config)
+        is_pg  = db_config and db_config.get('type') == 'postgresql'
+        query  = """
+            SELECT semana, centro, overall_score, overall_standing,
+                   rank_station, rank_wow,
+                   fico, fico_tier, whc_pct, whc_tier,
+                   dcr_pct, dcr_tier, dnr_dpmo, dnr_tier,
+                   lor_dpmo, lor_tier, dsc_dpmo, dsc_tier,
+                   pod_pct, pod_tier, cc_pct, cc_tier,
+                   ce_dpmo, ce_tier, cdf_dpmo, cdf_tier,
+                   speeding_rate, speeding_tier,
+                   mentor_adoption, mentor_tier,
+                   vsa_compliance, vsa_tier,
+                   whc_pct, whc_tier, boc, cas,
+                   capacity_next_day, capacity_next_day_tier,
+                   capacity_same_day, capacity_same_day_tier,
+                   safety_tier, quality_tier, capacity_tier,
+                   focus_area_1, focus_area_2, focus_area_3,
+                   uploaded_by, timestamp
+            FROM station_scorecards
+            ORDER BY centro ASC, semana DESC
+        """
+        df = pd.read_sql_query(query, conn)
+        conn.close()
         return df
     except Exception as e:
         logger.error(f"get_station_scorecards error: {e}")
         return pd.DataFrame()
 
 
-# ═══════════════════════════════════════════════════════════════
-# HELPERS DE CENTRO ASIGNADO (restricción JT por centro v3.6)
-# ═══════════════════════════════════════════════════════════════
-
-def get_user_centro(username: str, db_config: Optional[Dict] = None) -> Optional[str]:
-    """
-    Devuelve el centro asignado a un JT, o None si no tiene restricción.
-    None = ve todos los centros.
-    """
-    try:
-        with db_connection(db_config) as conn:
-            is_pg = db_config and db_config.get('type') == 'postgresql'
-            ph = '%s' if is_pg else '?'
-            cursor = conn.cursor()
-            cursor.execute(
-                f"SELECT centro_asignado FROM users WHERE LOWER(username) = {ph}",
-                (username.lower(),)
-            )
-            row = cursor.fetchone()
-            if row and row[0]:
-                return str(row[0]).strip().upper() or None
-            return None
-    except Exception as e:
-        logger.error(f"get_user_centro error: {e}")
-        return None
-
-
-def set_user_centro(username: str, centro: Optional[str],
-                    db_config: Optional[Dict] = None) -> bool:
-    """
-    Asigna (o quita) el centro a un usuario JT.
-    centro=None → sin restricción (ve todos).
-    centro='DIC1' → solo ve DIC1.
-    """
-    try:
-        valor = centro.strip().upper() if centro and centro.strip() else None
-        with db_connection(db_config) as conn:
-            is_pg = db_config and db_config.get('type') == 'postgresql'
-            ph = '%s' if is_pg else '?'
-            cursor = conn.cursor()
-            cursor.execute(
-                f"UPDATE users SET centro_asignado = {ph} WHERE LOWER(username) = {ph}",
-                (valor, username.lower())
-            )
-            conn.commit()
-        logger.info(f"centro_asignado → '{username}': {valor!r}")
-        return True
-    except Exception as e:
-        logger.error(f"set_user_centro error: {e}")
-        return False
-
-
-# ═══════════════════════════════════════════════════════════════
-# ALERTAS POR EMAIL (v3.6)
-# ═══════════════════════════════════════════════════════════════
-
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-
-
-def send_alert_email(smtp_cfg: Dict, to_email: str, subject: str, body_html: str) -> bool:
-    """
-    Envía un email de alerta vía SMTP.
-
-    smtp_cfg esperado (desde st.secrets['smtp']):
-        host, port, user, password, from_email
-
-    Soporta TLS (port 587) y SSL (port 465).
-    """
-    try:
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = subject
-        msg['From']    = smtp_cfg.get('from_email', smtp_cfg['user'])
-        msg['To']      = to_email
-        msg.attach(MIMEText(body_html, 'html', 'utf-8'))
-
-        port = int(smtp_cfg.get('port', 587))
-        host = smtp_cfg['host']
-
-        if port == 465:
-            with smtplib.SMTP_SSL(host, port) as srv:
-                srv.login(smtp_cfg['user'], smtp_cfg['password'])
-                srv.sendmail(msg['From'], [to_email], msg.as_string())
-        else:
-            with smtplib.SMTP(host, port) as srv:
-                srv.ehlo()
-                srv.starttls()
-                srv.login(smtp_cfg['user'], smtp_cfg['password'])
-                srv.sendmail(msg['From'], [to_email], msg.as_string())
-
-        logger.info(f"✉️ Alerta enviada a {to_email}: {subject}")
-        return True
-    except Exception as e:
-        logger.error(f"send_alert_email error: {e}")
-        return False
-
-
-def check_and_send_alerts(week: str, center: str,
-                          smtp_cfg: Optional[Dict] = None,
-                          alert_email: Optional[str] = None,
-                          db_config: Optional[Dict] = None) -> int:
-    """
-    Comprueba conductores que llevan ≥2 semanas consecutivas en POOR
-    y envía un email de alerta consolidado.
-
-    Devuelve: número de conductores alertados.
-    """
-    if not smtp_cfg or not alert_email:
-        logger.info("Alertas desactivadas (sin config SMTP o email destino).")
-        return 0
-
-    try:
-        with db_connection(db_config) as conn:
-            is_pg = db_config and db_config.get('type') == 'postgresql'
-            ph = '%s' if is_pg else '?'
-
-            # Conductores POOR en la semana actual
-            cursor = conn.cursor()
-            df_current = pd.read_sql_query(
-                f"SELECT driver_id, driver_name, score, detalles "
-                f"FROM scorecards WHERE centro = {ph} AND semana = {ph} "
-                f"AND calificacion = '🛑 POOR'",
-                conn, params=(center, week)
-            )
-
-            if df_current.empty:
-                return 0
-
-            # Semana inmediatamente anterior (la más reciente por fecha antes de esta)
-            df_prev_meta = pd.read_sql_query(
-                f"SELECT semana FROM scorecards "
-                f"WHERE centro = {ph} "
-                f"AND fecha_semana < (SELECT MIN(fecha_semana) FROM scorecards "
-                f"                    WHERE centro = {ph} AND semana = {ph}) "
-                f"GROUP BY semana ORDER BY fecha_semana DESC LIMIT 1",
-                conn, params=(center, center, week)
-            )
-
-            if df_prev_meta.empty:
-                return 0
-
-            prev_week = df_prev_meta['semana'].iloc[0]
-
-            df_prev_poor = pd.read_sql_query(
-                f"SELECT driver_id FROM scorecards "
-                f"WHERE centro = {ph} AND semana = {ph} AND calificacion = '🛑 POOR'",
-                conn, params=(center, prev_week)
-            )
-
-        if df_prev_poor.empty:
-            return 0
-
-        # Intersección: POOR esta semana Y la anterior
-        repeated_poor = df_current[
-            df_current['driver_id'].isin(df_prev_poor['driver_id'])
-        ]
-
-        if repeated_poor.empty:
-            return 0
-
-        # Construir email HTML
-        rows_html = ""
-        for _, r in repeated_poor.iterrows():
-            rows_html += (
-                f"<tr>"
-                f"<td style='padding:8px;border-bottom:1px solid #eee'>{r['driver_name']}</td>"
-                f"<td style='padding:8px;border-bottom:1px solid #eee;color:#dc3545;font-weight:700'>{int(r['score'])}</td>"
-                f"<td style='padding:8px;border-bottom:1px solid #eee;font-size:0.9em'>{r['detalles']}</td>"
-                f"</tr>"
-            )
-
-        body = f"""
-        <div style='font-family:Arial,sans-serif;max-width:700px;margin:0 auto'>
-            <div style='background:#232f3e;color:white;padding:20px;border-radius:8px 8px 0 0'>
-                <h2 style='margin:0'>🚨 Alerta de Calidad — {center} {week}</h2>
-                <p style='margin:5px 0 0;opacity:.8'>
-                    {len(repeated_poor)} conductor(es) en POOR durante 2 semanas consecutivas
-                    ({prev_week} y {week})
-                </p>
-            </div>
-            <div style='padding:20px;border:1px solid #dee2e6;border-top:none;border-radius:0 0 8px 8px'>
-                <table style='width:100%;border-collapse:collapse'>
-                    <thead>
-                        <tr style='background:#f8f9fa'>
-                            <th style='padding:10px;text-align:left'>Conductor</th>
-                            <th style='padding:10px;text-align:left'>Score</th>
-                            <th style='padding:10px;text-align:left'>Problemas</th>
-                        </tr>
-                    </thead>
-                    <tbody>{rows_html}</tbody>
-                </table>
-                <p style='color:#6c757d;font-size:0.85em;margin-top:20px'>
-                    Este mensaje ha sido generado automáticamente por Winiw Quality Scorecard.
-                </p>
-            </div>
-        </div>
-        """
-
-        subject = f"🚨 [{center} {week}] {len(repeated_poor)} conductor(es) POOR 2 semanas consecutivas"
-        send_alert_email(smtp_cfg, alert_email, subject, body)
-        return len(repeated_poor)
-
-    except Exception as e:
-        logger.error(f"check_and_send_alerts error: {e}")
-        return 0
+    success = main()
+    sys.exit(0 if success else 1)
