@@ -1,445 +1,195 @@
-# 👑 SISTEMA SUPERADMIN - GUÍA COMPLETA
+# 👑 GUÍA SUPERADMIN — Winiw Quality Scorecard v3.9
 
-## 🎯 ¿QUÉ ES SUPERADMIN?
-
-**Superadmin** es el rol de máximo nivel en el sistema. Solo el superadmin configurado en WINIW_ADMIN_USER tendrá este rol.
+> Autor: [@pablo25rf](https://github.com/pablo25rf)
 
 ---
 
-## 📊 JERARQUÍA DE ROLES
+## ¿Qué es Superadmin?
+
+**Superadmin** es el rol de máximo nivel del sistema. Solo el usuario configurado en `WINIW_ADMIN_USER` tiene este rol por defecto. Puedes promover otros usuarios una vez dentro.
+
+---
+
+## Jerarquía de roles
 
 ```
-        👑 SUPERADMIN (configurado en WINIW_ADMIN_USER)
+        👑 SUPERADMIN
                  |
                  ├── Control total del sistema
-                 ├── Gestionar admins
-                 ├── Ver logs
-                 └── Configuración avanzada
+                 ├── Gestionar admins y superadmins
+                 ├── Ver y descargar logs
+                 └── Configuración avanzada y reset de BD
                        |
-        🔑 ADMIN (Otros administradores)
+        🔑 ADMIN
                  |
-                 ├── Procesar archivos
+                 ├── Procesar archivos CSV/PDF
                  ├── Gestionar usuarios JT
-                 └── Visualizar todo
+                 └── Ver scorecards de todos los centros
                        |
-        👔 JT (Jefes de Tráfico)
+        👔 JT (Jefe de Tráfico)
                  |
-                 └── Solo visualización
+                 └── Solo visualización de su centro y semanas recientes
 ```
 
 ---
 
-## 🔐 PERMISOS DETALLADOS
+## Permisos detallados
 
-### 👑 SUPERADMIN (Solo tú)
+### 👑 SUPERADMIN
 
-✅ **TODO lo que puede hacer Admin**
-✅ **PLUS Exclusivo:**
-- Crear/Eliminar otros Admins
+- Todo lo que puede hacer Admin
+- Crear y eliminar Admins y Superadmins
 - Promocionar Admin → Superadmin
-- Ver logs del sistema en tiempo real
-- Descargar logs completos
-- Estadísticas avanzadas del sistema
-- Configuración avanzada de BD
-- Protección: Nadie puede eliminarte
+- Ver logs del sistema en tiempo real y descargarlos
+- Estadísticas avanzadas de BD
+- Reset total de base de datos (con confirmación)
+- Protección: el sistema nunca permite eliminar al último superadmin activo
 
-### 🔑 ADMIN (Tus administradores)
+### 🔑 ADMIN
 
-✅ Procesar archivos Amazon
-✅ Generar scorecards
-✅ Descargar Excel
-✅ Ver todo el histórico
-✅ Crear/Eliminar usuarios JT
-❌ **NO puede:**
-- Crear otros Admins
-- Eliminar Admins
-- Ver logs del sistema
-- Acceder a zona Superadmin
+- Procesar archivos Amazon (CSV/Excel/PDF)
+- Generar y descargar scorecards Excel
+- Ver histórico completo de todos los centros
+- Crear/eliminar/modificar usuarios JT
+- **No puede** crear Admins, ver logs, acceder a la Zona Superadmin ni hacer reset de BD
 
-### 👔 JT (Jefes de Tráfico)
+### 👔 JT
 
-✅ Ver scorecards generados
-✅ Ver histórico filtrado
-✅ Buscar conductores
-✅ Cambiar su propia contraseña
-❌ **NO puede:**
-- Procesar archivos
-- Descargar nada
-- Crear usuarios
-- Acceder a administración
+- Ver el scorecard de su centro asignado
+- Ver histórico filtrado a sus 2 semanas más recientes
+- Buscar conductores
+- Cambiar su propia contraseña
+- **No puede** procesar archivos, descargar Excel, crear usuarios ni acceder a administración
 
 ---
 
-## 🚀 INSTALACIÓN
+## Primer acceso
 
-### Paso 1: Actualizar el repositorio
+Al arrancar la app por primera vez con `WINIW_ADMIN_USER` y `WINIW_ADMIN_PASS` definidas:
+
+1. El usuario superadmin se crea automáticamente (solo si no existe)
+2. Login con esas credenciales
+3. **El sistema fuerza cambio de contraseña** en el primer login (`must_change_password = 1`)
+4. Ya estás dentro con control total
+
+---
+
+## Operaciones frecuentes
+
+### Crear un Admin
+
+1. **Administración** → **Crear Nuevo Usuario**
+2. Rellena usuario, contraseña y selecciona **Rol: admin**
+3. Solo tú ves la opción `admin` en el desplegable — los admins solo pueden crear JTs
+
+### Crear un JT y asignarle centro
+
+1. **Administración** → **Crear Nuevo Usuario** → **Rol: jt**
+2. Después, en Gestión de Usuarios, asigna el centro al JT
+
+### Promover Admin a Superadmin
+
+1. **Zona Superadmin** → **Configuración** → **Promocionar Admin a Superadmin**
+2. Escribe el nombre de usuario y confirma
+3. Ese usuario tendrá exactamente los mismos permisos que tú — úsalo con criterio
+
+### Ver logs del sistema
+
+1. **Zona Superadmin** → **Ver Logs**
+2. Selecciona cuántas líneas mostrar (10–500)
+3. Usa **Descargar logs** para análisis en detalle
+
+### Investigar un error de procesamiento
+
+1. Zona Superadmin → Ver Logs
+2. Busca líneas con `ERROR`
+3. El log incluye timestamp, usuario que realizó la acción y detalle del error
+
+### Desbloquear una cuenta bloqueada por rate limiting
+
+En v3.9 el rate limiting es persistente en BD (tabla `login_attempts`). Para desbloquear manualmente:
+
+**Desde la interfaz:**  
+Administración → Gestión de Usuarios → selecciona el usuario → Desbloquear
+
+**Desde SQL (si no hay acceso a la app):**
+```sql
+DELETE FROM login_attempts WHERE username = 'el_usuario';
+```
+
+### Reset total de base de datos
+
+> ⚠️ Irreversible. Solo para entornos de desarrollo o reinstalación completa.
+
+1. **Zona Superadmin** → **Configuración**
+2. Expande **Reset de Base de Datos**
+3. Escribe `CONFIRMAR` en el campo de texto
+4. Clic en **BORRAR TODO**
+
+---
+
+## Seguridad
+
+### Protecciones del sistema
+
+- No es posible eliminar al último superadmin activo
+- Los admins no pueden ver ni eliminar a otros admins
+- Los admins no pueden ver la Zona Superadmin
+- El rate limiting (5 intentos → 15 min de bloqueo) es persistente en BD desde v3.9 — sobrevive reinicios y es efectivo en despliegues multi-worker
+- Las contraseñas se almacenan con bcrypt (salt automático); SHA-256 como fallback si bcrypt no está instalado
+
+### Recomendaciones
+
+- **Mínimo número de superadmins** — idealmente 1 o 2 personas de máxima confianza
+- **Cambiar la contraseña inicial** inmediatamente en el primer acceso
+- **Cada persona su propio usuario** — nunca compartir credenciales
+- **Revisar logs regularmente** para detectar actividad anómala
+- **Backup antes de cambios importantes**:
 
 ```bash
-git pull origin main
-```
-
-La funcionalidad Superadmin está integrada en `app.py` desde v3.8 — no hay archivos separados.
-
-### Paso 2: Reiniciar App
-
-```bash
-streamlit run app.py
-```
-
-### Paso 3: Login
-
-Tu usuario superadmin (WINIW_ADMIN_USER) se crea automáticamente al arrancar la app.
-
-```
-Usuario: [WINIW_ADMIN_USER]
-Contraseña: [WINIW_ADMIN_PASS] (cámbiala al entrar)
-```
-
----
-
-## 🎮 CÓMO USAR TUS PODERES DE SUPERADMIN
-
-### 1️⃣ Crear un Admin
-
-1. Ve a **"👑 Administración"**
-2. Sección **"➕ Crear Nuevo Usuario"**
-3. Rellena:
-   - Usuario: `carlos`
-   - Contraseña: `Admin2026`
-   - **Rol: admin** ← Esta opción solo tú la ves
-4. Crear Usuario
-
-**Resultado**: Carlos puede procesar archivos y gestionar JTs, pero NO puede crear otros admins.
-
-### 2️⃣ Crear un JT
-
-1. Mismo proceso
-2. **Rol: jt**
-3. Crear Usuario
-
-**Resultado**: Solo visualización, sin descargas.
-
-### 3️⃣ Ver Logs del Sistema
-
-1. Ve a **"👑 Administración"**
-2. Baja hasta **"👑 Zona Superadmin (Solo tú)"**
-3. Tab **"📝 Ver Logs"**
-4. Puedes:
-   - Ver últimas 10-500 líneas
-   - Descargar logs completos
-   - Ver errores y actividad
-
-### 4️⃣ Promocionar Admin a Superadmin
-
-⚠️ **ÚSALO CON CUIDADO** - Le das control total
-
-1. **"👑 Zona Superadmin"**
-2. Tab **"⚙️ Configuración"**
-3. Expandir **"👑 Promocionar Admin a Superadmin"**
-4. Ingresa nombre del admin
-5. Promocionar
-
-**Resultado**: Ese usuario ahora tiene tus mismos poderes.
-
-### 5️⃣ Ver Estadísticas Avanzadas
-
-1. **"👑 Zona Superadmin"**
-2. Tab **"📊 Estadísticas Avanzadas"**
-3. Verás:
-   - Cuántos Superadmins hay
-   - Cuántos Admins
-   - Cuántos JTs
-   - Total de registros en BD
-
----
-
-## 🛡️ PROTECCIONES DE SEGURIDAD
-
-### 1. No puedes eliminarte a ti mismo
-
-```
-🛑 No puedes eliminar al superadmin principal
-```
-
-Ni siquiera tú puedes borrarte accidentalmente.
-
-### 2. Admins NO pueden eliminar otros admins
-
-```
-🛑 Solo Superadmins pueden eliminar Administradores
-```
-
-Un admin solo puede eliminar JTs.
-
-### 3. Admins NO pueden crear otros admins
-
-En su formulario de creación solo ven:
-```
-Rol: [ jt ]
-ℹ️ Solo Superadmins pueden crear otros Administradores
-```
-
-### 4. Solo Superadmin ve la "Zona Superadmin"
-
-Los admins normales NO ven:
-- Logs del sistema
-- Estadísticas avanzadas
-- Configuración de promoción
-- Zona exclusiva
-
----
-
-## 🎨 INTERFAZ VISUAL
-
-### Login
-
-```
-Usuario: [WINIW_ADMIN_USER]
-Contraseña: ******
-
-✅ Acceso concedido
-```
-
-### Sidebar (Barra Lateral)
-
-```
-👤 Usuario Activo
-Nombre: [WINIW_ADMIN_USER]
-Rol: 👑 Superadmin
-```
-
-### Pestaña Administración
-
-Solo tú verás al final:
-
-```
-─────────────────────────────────
-👑 Zona Superadmin (Solo tú)
-─────────────────────────────────
-
-📊 Estadísticas Avanzadas | 📝 Ver Logs | ⚙️ Configuración
-```
-
----
-
-## 📋 CASOS DE USO
-
-### Caso 1: Contratar Nuevo Admin
-
-**Situación**: Contratas a María como administradora.
-
-**Pasos**:
-1. Login como superadmin
-2. Crear usuario:
-   - Usuario: maria
-   - Contraseña: Temp2026
-   - Rol: **admin**
-3. María puede ahora:
-   - Procesar archivos
-   - Crear JTs
-   - Ver todo
-4. María **NO** puede:
-   - Crear otros admins
-   - Verte a ti en la lista
-   - Acceder a zona superadmin
-
-### Caso 2: María Merece Ser Superadmin
-
-**Situación**: María lleva 6 meses, confías en ella 100%.
-
-**Pasos**:
-1. Login como superadmin
-2. "👑 Zona Superadmin" → Configuración
-3. Promocionar Admin a Superadmin
-4. Usuario: maria
-5. Promocionar
-
-**Resultado**: María ahora tiene control total igual que tú.
-
-### Caso 3: Admin se Va de la Empresa
-
-**Situación**: Carlos renuncia.
-
-**Pasos**:
-1. Login como superadmin
-2. Eliminar Usuario
-3. Usuario: carlos
-4. Eliminar
-
-**Resultado**: Carlos no puede acceder más. Sus datos procesados se mantienen.
-
-### Caso 4: Investigar un Error
-
-**Situación**: Algo falló al procesar archivos.
-
-**Pasos**:
-1. "👑 Zona Superadmin" → Ver Logs
-2. Buscar líneas con "ERROR"
-3. Ver qué pasó
-4. Descargar logs para análisis detallado
-
----
-
-## 🔄 MIGRACIÓN DESDE VERSIÓN ANTERIOR
-
-### Si ya tienes usuarios en la BD:
-
-**Escenario A: El usuario superadmin ya existe**
-
-✅ **Automático**: Al arrancar la app, el usuario en WINIW_ADMIN_USER se crea/actualiza como superadmin
-
-**Escenario B: Tienes otros admins**
-
-✅ Siguen siendo "admin" (no superadmin)
-✅ Mantienen sus permisos actuales
-✅ NO pueden crear otros admins ahora
-
-**Escenario C: Quieres hacer superadmin a alguien más**
-
-Usa la función **"Promocionar Admin a Superadmin"**
-
----
-
-## ⚠️ RECOMENDACIONES DE SEGURIDAD
-
-### 1. Mínimos Superadmins
-
-Recomendado: **1-2 máximo**
-- Solo personas de máxima confianza
-- Idealmente solo tú
-
-### 2. Cambiar Contraseña Inicial
-
-```
-[WINIW_ADMIN_PASS] → TuContraseñaFuerte123!
-```
-
-Al primer login, el sistema te fuerza a cambiarla.
-
-### 3. No Compartir Credenciales
-
-Cada persona debe tener su propio usuario.
-
-### 4. Revisar Logs Regularmente
-
-Los logs muestran:
-- Quién procesó archivos
-- Errores del sistema
-- Actividad sospechosa
-
-### 5. Backup de Base de Datos
-
-```bash
-# Backup antes de cambios importantes
 cp amazon_quality.db amazon_quality_backup_$(date +%Y%m%d).db
 ```
 
 ---
 
-## 📊 COMPARACIÓN DE VERSIONES
-
-| Aspecto | Versión Anterior | Con Superadmin |
-|---------|------------------|----------------|
-| Roles | 2 (admin, jt) | 3 (superadmin, admin, jt) |
-| Admin puede crear admins | ✅ Sí | ❌ No |
-| Admin puede ver logs | ❌ No | ❌ No |
-| Protección usuario principal | ❌ No | ✅ Sí |
-| Zona exclusiva | ❌ No | ✅ Sí (superadmin) |
-| Promoción de roles | ❌ No | ✅ Sí (superadmin) |
-
----
-
-## 🆘 PROBLEMAS COMUNES
-
-### "No veo la zona Superadmin"
-
-**Causa**: No eres superadmin
-
-**Solución**: Verifica que tu usuario sea el configurado en WINIW_ADMIN_USER, o que hayas sido promovido.
+## Diagnóstico desde consola
 
 ```python
-# Verificar en BD
 import sqlite3
 conn = sqlite3.connect('amazon_quality.db')
-cursor = conn.cursor()
-cursor.execute("SELECT username, role FROM users")
-print(cursor.fetchall())
+
+# Ver todos los usuarios y roles
+print(conn.execute("SELECT username, role, active FROM users").fetchall())
+
+# Ver intentos de login bloqueados
+print(conn.execute(
+    "SELECT username, fail_count, locked_until FROM login_attempts"
+).fetchall())
+
 conn.close()
 ```
 
-### "No puedo crear usuarios admin"
+---
 
-**Causa**: Eres admin, no superadmin
+## Checklist de primer despliegue
 
-**Solución**: Solo superadmins pueden crear otros admins. Es intencional por seguridad.
-
-### "Quiero cambiar a alguien de JT a Admin"
-
-**Solución**: 
-1. Como superadmin, elimina el usuario JT
-2. Créalo de nuevo como admin
-
-O directamente en BD:
-```sql
-UPDATE users SET role = 'admin' WHERE username = 'juan';
-```
+- [ ] Definir `WINIW_ADMIN_USER` y `WINIW_ADMIN_PASS` en el entorno
+- [ ] Arrancar la app (`streamlit run app.py`)
+- [ ] Login y cambio obligatorio de contraseña
+- [ ] Verificar que aparece la **Zona Superadmin**
+- [ ] Crear los usuarios Admin necesarios
+- [ ] Crear los usuarios JT y asignarles centros
+- [ ] Verificar que los JTs solo ven su centro
+- [ ] Revisar logs para confirmar que la actividad queda registrada
 
 ---
 
-## 🎉 BENEFICIOS DEL SISTEMA
+## Cambios en v3.9 relevantes para Superadmin
 
-### 1. Control Total
-
-Tú decides quién tiene qué permisos.
-
-### 2. Seguridad
-
-Nadie puede crear admins sin tu autorización.
-
-### 3. Trazabilidad
-
-Los logs muestran toda la actividad.
-
-### 4. Escalabilidad
-
-Puedes tener:
-- 1 Superadmin (tú)
-- 5 Admins (tus managers)
-- 20 JTs (operaciones)
-
-### 5. Protección
-
-Imposible eliminarte accidentalmente.
+- **Rate limiting en BD** — los bloqueos sobreviven reinicios del servidor; ya no se pierden si Streamlit recarga el proceso
+- **Columna `centro` en usuarios** — los JTs tienen su centro asignado directamente en la tabla `users`; visible y editable desde la interfaz
+- **`get_user_role()` filtra `active = 1`** — usuarios desactivados ya no son reconocidos como superadmin en checks de permisos (bug corregido)
 
 ---
 
-## 📝 CHECKLIST DE IMPLEMENTACIÓN
-
-- [ ] Backup de archivos actuales
-- [ ] Reemplazar con versión Superadmin
-- [ ] Reiniciar app
-- [ ] Login como superadmin (WINIW_ADMIN_USER)
-- [ ] Cambiar contraseña
-- [ ] Verificar que ves "👑 Zona Superadmin"
-- [ ] Probar crear un admin
-- [ ] Probar crear un JT
-- [ ] Revisar logs
-- [ ] Verificar estadísticas
-
----
-
-## 🚀 ¡LISTO!
-
-Ahora eres el **único Superadmin** del sistema. Tienes control total y nadie más puede crear administradores sin tu autorización.
-
-**Archivos a usar**:
-- `app.py` — aplicación principal (incluye funcionalidad Superadmin)
-- `amazon_scorecard_ultra_robust_v3_FINAL.py` — motor de procesamiento
-
-**¿Preguntas?** Todo está documentado arriba. 😊
-
----
-
-**Versión**: 3.1 SUPERADMIN  
-**Fecha**: Marzo 2026  
-**Nivel de Seguridad**: 👑 MÁXIMO
+*Winiw Quality Scorecard v3.9 · [@pablo25rf](https://github.com/pablo25rf) · Marzo 2026*

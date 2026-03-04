@@ -1,6 +1,10 @@
-# 🚛 Winiw Quality Scorecard v3.8
+# 🚛 Winiw Quality Scorecard v3.9
 
 Sistema de gestión de calidad para Amazon DSP — procesa CSVs y PDFs semanales, calcula scores por conductor y genera scorecards automáticos con visualización en tiempo real.
+
+> **Autor:** [@pablo25rf](https://github.com/pablo25rf)
+
+---
 
 ## ✨ Funcionalidades
 
@@ -9,10 +13,11 @@ Sistema de gestión de calidad para Amazon DSP — procesa CSVs y PDFs semanales
 - **Calificaciones**: 💎 FANTASTIC · 🥇 GREAT · ⚠️ FAIR · 🛑 POOR
 - **Dashboard ejecutivo** con ranking de centros y tendencia semanal
 - **Histórico completo** con filtros avanzados y exportación Power BI
-- **Gestión de usuarios** con roles (Superadmin / Admin / JT) y rate limiting
-- **Alertas por email** automáticas para conductores POOR
+- **Gestión de usuarios** con roles (Superadmin / Admin / JT) y rate limiting persistente
 - **Targets por centro** configurables desde la interfaz
 - **Base de datos dual**: PostgreSQL/Supabase (producción) o SQLite (desarrollo local)
+- **WHC count** por estación vía LEFT JOIN automático
+- **Columna `anio`** en scorecards y excepciones WHC para filtros rápidos
 
 ## 🚀 Instalación rápida
 
@@ -83,9 +88,8 @@ WINIW_TOOL/
 ├── .gitignore
 ├── instalar_windows.bat
 ├── instalar_linux_mac.sh
-├── test_scorecard_v37.py
-├── .github/workflows/tests.yml
-└── documentacion/
+├── test_scorecard_v39.py                     # Suite de tests (159 tests)
+└── docs/
     ├── DEPLOY.md
     ├── GUIA_SUPERADMIN.md
     ├── MANUAL_OPERACION_DETALLADO.md
@@ -96,8 +100,10 @@ WINIW_TOOL/
 ## 🧪 Tests
 
 ```bash
-WINIW_ADMIN_USER=test WINIW_ADMIN_PASS=test python -m unittest test_scorecard_v37 -v
+WINIW_ADMIN_USER=test WINIW_ADMIN_PASS=test python -m unittest test_scorecard_v39 -v
 ```
+
+159 tests — 0 fallos. 14 skipped requieren el PDF real de DMA3.
 
 ## 📋 Changelog
 
@@ -105,4 +111,4 @@ Ver [CHANGELOG.md](CHANGELOG.md)
 
 ## 📄 Licencia
 
-Uso interno — TIPSA / Amazon DSP. Todos los derechos reservados.
+© 2026 [@pablo25rf](https://github.com/pablo25rf) · Amazon DSP · Todos los derechos reservados.

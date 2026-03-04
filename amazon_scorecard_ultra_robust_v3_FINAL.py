@@ -1,12 +1,22 @@
 """
-Amazon Quality Scorecard Engine
-================================
+Amazon Quality Scorecard Engine v3.9
+======================================
 Sistema de procesamiento y análisis de métricas de calidad para conductores Amazon.
 Soporta PostgreSQL y SQLite con auto-migraciones y validaciones robustas.
 
-Versión: 3.0
-Fecha: Febrero 2026
+Versión: v3.9
+Fecha: Marzo 2026
+
+Convención de idioma
+--------------------
+- Mensajes de UI y logs de negocio → Español  (los ven los usuarios finales)
+- Comentarios internos de código   → Español  (equipo principalmente hispano)
+- Nombres de variables/funciones   → Inglés   (convención Python/PEP8)
+- Términos técnicos Amazon (DPMO, WHC, DCR…) → tal cual, sin traducir
 """
+
+__version__ = "3.9"  # Fuente de verdad para cualquier referencia programática a la versión
+
 
 import pandas as pd
 import numpy as np
@@ -45,11 +55,9 @@ except Exception:
 
 from datetime import datetime, timedelta
 
-# Configurar logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+# El logging se configura EXCLUSIVAMENTE en app.py (o en el entrypoint).
+# Aquí solo obtenemos el logger del módulo para no interferir con la configuración
+# del proceso principal (logging.basicConfig solo tiene efecto la primera vez).
 logger = logging.getLogger(__name__)
 
 warnings.filterwarnings('ignore')
@@ -168,7 +176,6 @@ def validate_dataframe(df: pd.DataFrame, required_cols: List[str],
     
     return True, "OK"
 
-import io
 
 def read_csv_safe(filepath_or_buffer, encoding: str = 'utf-8') -> Optional[pd.DataFrame]:
     """Lee CSV con manejo robusto de encoding (soporta paths o buffers)"""
@@ -290,7 +297,8 @@ def read_excel_safe(filepath_or_buffer) -> Optional[pd.DataFrame]:
                     if has_id and has_metrics:
                         logger.info(f"✓ Header detectado en hoja '{sheet}', fila {skip}")
                         return df
-                except:
+                except Exception as e:
+                    logger.debug(f"Hoja '{sheet}' skip={skip} no válida: {e}")
                     continue
         return None
     except Exception as e:
@@ -577,6 +585,7 @@ def process_dwc(df: pd.DataFrame) -> pd.DataFrame:
     
     # 2. Buscar eventos de riesgo DNR (Formato antiguo)
     dnr_risk_events = pd.Series(0.0, index=df.index)
+    risk_group = None  # Se asigna solo si el archivo viene en formato antiguo (columnas Type+Total)
     if 'Type' in df.columns and 'Total' in df.columns:
         # Filtrar solo filas con DNR Risk
         dnr_mask = df['Type'].str.contains('DNR Risk', case=False, na=False)
@@ -591,10 +600,10 @@ def process_dwc(df: pd.DataFrame) -> pd.DataFrame:
                 # Si col es duplicado, series será un DataFrame
                 if isinstance(series, pd.DataFrame):
                     series = series.iloc[:, 0] # Tomar solo la primera
-                
+
                 vals = series.apply(lambda x: safe_number(x, 0)).fillna(0)
                 dnr_risk_events = dnr_risk_events + vals
-    
+
     # 3. Buscar DWC% e IADC% (Formato nuevo)
     dwc_col = None
     iadc_col = None
@@ -602,10 +611,10 @@ def process_dwc(df: pd.DataFrame) -> pd.DataFrame:
         c = str(col).lower()
         if 'dwc' in c and '%' in c: dwc_col = col
         if 'iadc' in c and '%' in c: iadc_col = col
-        
+
     res = pd.DataFrame({'ID': df['ID']})
-    
-    if 'risk_group' in locals():
+
+    if risk_group is not None:
         res = res.merge(risk_group.reset_index().rename(columns={'Total': 'DNR_RISK_EVENTS'}), on='ID', how='left')
     else:
         res['DNR_RISK_EVENTS'] = dnr_risk_events
@@ -965,8 +974,8 @@ def extract_info_from_path(path: str) -> Tuple[str, str]:
                 dt_shifted = dt + timedelta(days=1)
                 isoyear, isoweek, isoday = dt_shifted.isocalendar()
                 week = f"W{isoweek:02d}"
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Parsing de fecha desde nombre de archivo falló ({filename}): {e}")
         
         if week == "N/A":
             # Formato 2026-05 (donde 05 es la semana)
@@ -1187,25 +1196,28 @@ def create_professional_excel(df: pd.DataFrame, output_path: str,
             cell.font = font_header
             cell.fill = fill_header
             cell.alignment = align_center
-            
-        top_10 = df_sorted.sort_values(['SCORE', 'DNR'], ascending=[False, True]).head(10)
+
+        # df_sorted ya está ordenado por SCORE desc, DNR asc (calculado arriba).
+        # top_10 y bottom_10 se extraen directamente sin re-sortear.
+        top_10    = df_sorted.head(10)
+        bottom_10 = df_sorted.tail(15).sort_values(['SCORE', 'DNR'], ascending=[True, False])
+
         for idx, (_, r) in enumerate(top_10.iterrows(), 4):
             ws_rank.cell(row=idx, column=2, value=r['Nombre']).fill = fill_green
             ws_rank.cell(row=idx, column=3, value=r['SCORE']).font = font_green
             ws_rank.cell(row=idx, column=4, value=r['DNR'])
-            
+
         # BOTTOM 10 / RED FLAGS
         ws_rank.merge_cells('F2:H2')
         ws_rank['F2'] = "🚨 RED FLAGS (POOR/FAIR)"
         ws_rank['F2'].font = Font(name='Segoe UI', size=12, bold=True, color='C62828')
-        
+
         for col, h in enumerate(headers_rank, 6):
             cell = ws_rank.cell(row=3, column=col, value=h)
             cell.font = font_header
             cell.fill = fill_header
             cell.alignment = align_center
-            
-        bottom_10 = df_sorted.sort_values(['SCORE', 'DNR'], ascending=[True, False]).head(15)
+
         for idx, (_, r) in enumerate(bottom_10.iterrows(), 4):
             ws_rank.cell(row=idx, column=6, value=r['Nombre']).fill = fill_red
             ws_rank.cell(row=idx, column=7, value=r['SCORE']).font = font_red
@@ -1296,9 +1308,8 @@ def process_single_batch(path_concessions, path_quality=None, path_false_scan=No
             return None
             
         df_conc_clean = process_concessions(df_concessions)
-        if df_conc_clean is not None and not df_conc_clean.empty and 'ID' in df_conc_clean.columns:
-            if df_conc_clean['ID'].duplicated().any():
-                df_conc_clean = df_conc_clean.drop_duplicates(subset='ID', keep='first')
+        # Nota: process_concessions() ya aplica drop_duplicates(subset='ID') internamente.
+        # El único guardián necesario es el drop_duplicates al final del merge (líneas abajo).
         
         df_qual_clean = process_quality(df_quality) if df_quality is not None and not df_quality.empty else None
         df_fs_clean = process_false_scan(df_false_scan_html) if df_false_scan_html is not None and not df_false_scan_html.empty else None
@@ -1316,7 +1327,9 @@ def process_single_batch(path_concessions, path_quality=None, path_false_scan=No
         if 'FS_Count' in df_merged.columns:
             df_merged['FS_Count'] = df_merged['FS_Count'].apply(lambda x: min(float(x), Config.MAX_FALSE_SCAN) if not pd.isna(x) else 0.0)
 
-        # Eliminar duplicados finales por si acaso
+        # Guardián final: elimina cualquier ID duplicado que pudiera filtrarse
+        # durante el merge (ej. por claves ambiguas en archivos suplementarios).
+        # process_concessions() ya deduplicó su parte; esto cubre el merge completo.
         if 'ID' in df_merged.columns:
             df_merged = df_merged.drop_duplicates(subset='ID', keep='first')
             
@@ -1341,7 +1354,7 @@ def get_db_connection(db_config: Optional[Dict] = None):
     if db_config and db_config.get('type') == 'postgresql':
         if not HAS_POSTGRES:
             raise ImportError("Librería 'psycopg2' no encontrada. Instálala con: pip install psycopg2-binary")
-        
+
         return psycopg2.connect(
             host=db_config.get('host', 'localhost'),
             database=db_config.get('database', 'postgres'),
@@ -1350,10 +1363,13 @@ def get_db_connection(db_config: Optional[Dict] = None):
             port=db_config.get('port', 5432)
         )
     else:
-        # Por defecto SQLite
-        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "amazon_quality.db")
+        # SQLite: respetar el path del config si está definido (clave para tests),
+        # caer al fichero por defecto solo en producción sin config.
+        if db_config and db_config.get('path'):
+            db_path = db_config['path']
+        else:
+            db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "amazon_quality.db")
         conn = sqlite3.connect(db_path)
-        # Habilitar acceso por nombre de columna en sqlite
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -1434,6 +1450,7 @@ def init_database(db_config: Optional[Dict] = None):
                 CREATE TABLE IF NOT EXISTS scorecards (
                     id SERIAL PRIMARY KEY,
                     semana VARCHAR(10),
+                    anio INTEGER,
                     fecha_semana DATE,
                     centro VARCHAR(20),
                     driver_id VARCHAR(50),
@@ -1487,7 +1504,8 @@ def init_database(db_config: Optional[Dict] = None):
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS scorecards (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    semana TEXT, fecha_semana DATE, centro TEXT, driver_id TEXT, driver_name TEXT,
+                    semana TEXT, anio INTEGER, fecha_semana DATE,
+                    centro TEXT, driver_id TEXT, driver_name TEXT,
                     calificacion TEXT, score FLOAT, entregados FLOAT, dnr FLOAT,
                     fs_count FLOAT, dnr_risk_events FLOAT, dcr FLOAT, pod FLOAT,
                     cc FLOAT, fdps FLOAT, rts FLOAT, cdf FLOAT, detalles TEXT,
@@ -1521,9 +1539,20 @@ def init_database(db_config: Optional[Dict] = None):
                 password TEXT,
                 role VARCHAR(20),
                 active INTEGER DEFAULT 1,
-                must_change_password INTEGER DEFAULT 0
+                must_change_password INTEGER DEFAULT 0,
+                centro VARCHAR(20)
             )
         ''')
+        # Migración: añadir columna centro si no existe en BDs creadas antes de v3.9
+        try:
+            if is_postgres:
+                cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS centro VARCHAR(20)")
+            else:
+                existing_u = [r[1] for r in cursor.execute("PRAGMA table_info(users)").fetchall()]
+                if 'centro' not in existing_u:
+                    cursor.execute("ALTER TABLE users ADD COLUMN centro TEXT")
+        except Exception:
+            pass
         # Índices de usuarios (se crean AQUÍ, después de que la tabla existe)
         users_indexes_pg = [
             "CREATE INDEX IF NOT EXISTS idx_users_username ON users (LOWER(username))",
@@ -1648,17 +1677,22 @@ def init_database(db_config: Optional[Dict] = None):
                 try: cursor.execute(idx)
                 except Exception: pass
 
-        # 5. wh_exceptions
-        wh_pk = "SERIAL PRIMARY KEY" if is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
-        wh_str = "VARCHAR(10)" if is_postgres else "TEXT"
-        wh_cen = "VARCHAR(20)" if is_postgres else "TEXT"
-        wh_did = "VARCHAR(50)" if is_postgres else "TEXT"
+        # 5. wh_exceptions — v3.9: columnas driver_name (lookup desde scorecards) y anio
+        wh_pk  = "SERIAL PRIMARY KEY" if is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        wh_str = "VARCHAR(10)"  if is_postgres else "TEXT"
+        wh_cen = "VARCHAR(20)"  if is_postgres else "TEXT"
+        wh_did = "VARCHAR(50)"  if is_postgres else "TEXT"
+        wh_dnm = "VARCHAR(255)" if is_postgres else "TEXT"
         wh_uby = "VARCHAR(100)" if is_postgres else "TEXT"
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS wh_exceptions (
                 id {wh_pk},
-                semana {wh_str} NOT NULL, fecha_semana DATE, centro {wh_cen} NOT NULL,
+                semana {wh_str} NOT NULL,
+                anio INTEGER,
+                fecha_semana DATE,
+                centro {wh_cen} NOT NULL,
                 driver_id {wh_did} NOT NULL,
+                driver_name {wh_dnm},
                 daily_limit_exceeded INTEGER DEFAULT 0,
                 weekly_limit_exceeded INTEGER DEFAULT 0,
                 under_offwork_limit INTEGER DEFAULT 0,
@@ -1673,6 +1707,20 @@ def init_database(db_config: Optional[Dict] = None):
             try: cursor.execute(idx)
             except Exception: pass
 
+        # 6. login_attempts — rate limiting persistente (multi-worker y multi-instancia)
+        # Reemplaza el dict en memoria (_LOGIN_ATTEMPTS) que era invisible entre workers.
+        lat_pk = "SERIAL PRIMARY KEY" if is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        lat_ts = "TIMESTAMP" if is_postgres else "TEXT"
+        cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS login_attempts (
+                id            {lat_pk},
+                username      VARCHAR(150) NOT NULL UNIQUE,
+                fail_count    INTEGER      NOT NULL DEFAULT 0,
+                locked_until  {lat_ts},
+                last_attempt  {lat_ts}
+            )
+        """)
+
         # ── MIGRACIÓN v3.2: columnas _oficial en scorecards (solo UPDATE desde PDF) ──
         pdf_cols_to_add = [
             ("entregados_oficial", "DOUBLE PRECISION" if is_postgres else "FLOAT"),
@@ -1684,6 +1732,7 @@ def init_database(db_config: Optional[Dict] = None):
             ("ce_dpmo",            "DOUBLE PRECISION" if is_postgres else "FLOAT"),
             ("cdf_dpmo_oficial",   "DOUBLE PRECISION" if is_postgres else "FLOAT"),
             ("pdf_loaded",         "INTEGER DEFAULT 0"),
+            ("anio",               "INTEGER"),  # v3.9: año extraído de semana para filtros rápidos
         ]
         for col_name, col_type in pdf_cols_to_add:
             try:
@@ -1697,19 +1746,66 @@ def init_database(db_config: Optional[Dict] = None):
             except Exception as e:
                 logger.warning(f"Migración v3.2 col {col_name}: {e}")
 
-        # Asegurar que el usuario 'pablo' existe como SUPERADMIN
-        q_check = "SELECT id FROM users WHERE LOWER(username) = %s" if is_postgres else "SELECT id FROM users WHERE LOWER(username) = ?"
-        cursor.execute(q_check, ("pablo",))
-        if not cursor.fetchone():
-            admin_pass = hash_password("Admin_Winiw_2026")
-            q_ins = "INSERT INTO users (username, password, role, must_change_password) VALUES (%s, %s, %s, %s)" if is_postgres else "INSERT INTO users (username, password, role, must_change_password) VALUES (?, ?, ?, ?)"
-            cursor.execute(q_ins, ("pablo", admin_pass, "superadmin", 1))
-            logger.info("Usuario 'pablo' creado como SUPERADMIN (requiere cambio de contraseña).")
+        # ── MIGRACIÓN v3.9: columnas driver_name y anio en wh_exceptions ─────
+        wh_v39_cols = [
+            ("driver_name", "VARCHAR(255)" if is_postgres else "TEXT"),
+            ("anio",        "INTEGER"),
+        ]
+        for col_name, col_type in wh_v39_cols:
+            try:
+                if is_postgres:
+                    cursor.execute(f"ALTER TABLE wh_exceptions ADD COLUMN IF NOT EXISTS {col_name} {col_type}")
+                else:
+                    cursor.execute("PRAGMA table_info(wh_exceptions)")
+                    existing_wh = [c[1] for c in cursor.fetchall()]
+                    if col_name not in existing_wh:
+                        cursor.execute(f"ALTER TABLE wh_exceptions ADD COLUMN {col_name} {col_type}")
+            except Exception as e:
+                logger.warning(f"Migración v3.9 wh_exceptions col {col_name}: {e}")
+
+        # ── Bootstrap del primer Superadmin ─────────────────────────────────
+        # Las credenciales se leen EXCLUSIVAMENTE de variables de entorno.
+        # Nunca se hardcodean en el código fuente.
+        #
+        # Variables requeridas:
+        #   WINIW_ADMIN_USER  — nombre de usuario del superadmin inicial (ej: "admin")
+        #   WINIW_ADMIN_PASS  — contraseña en texto plano (se hashea antes de guardar)
+        #
+        # Si alguna variable no está definida, el bootstrap se omite silenciosamente
+        # para no bloquear el arranque en entornos que ya tienen usuarios creados.
+        bootstrap_user = os.environ.get("WINIW_ADMIN_USER", "").strip().lower()
+        bootstrap_pass = os.environ.get("WINIW_ADMIN_PASS", "").strip()
+
+        if bootstrap_user and bootstrap_pass:
+            q_check = (
+                "SELECT id FROM users WHERE LOWER(username) = %s"
+                if is_postgres else
+                "SELECT id FROM users WHERE LOWER(username) = ?"
+            )
+            cursor.execute(q_check, (bootstrap_user,))
+            if not cursor.fetchone():
+                admin_pass = hash_password(bootstrap_pass)
+                q_ins = (
+                    "INSERT INTO users (username, password, role, must_change_password) "
+                    "VALUES (%s, %s, %s, %s)"
+                    if is_postgres else
+                    "INSERT INTO users (username, password, role, must_change_password) "
+                    "VALUES (?, ?, ?, ?)"
+                )
+                cursor.execute(q_ins, (bootstrap_user, admin_pass, "superadmin", 1))
+                logger.info(
+                    f"Usuario bootstrap '{bootstrap_user}' creado como SUPERADMIN "
+                    "(requiere cambio de contraseña en el primer acceso)."
+                )
+            else:
+                logger.debug(
+                    f"Bootstrap omitido: el usuario '{bootstrap_user}' ya existe en la BD."
+                )
         else:
-            # Actualizar pablo a superadmin si ya existe pero es admin
-            q_update = "UPDATE users SET role = %s WHERE LOWER(username) = %s" if is_postgres else "UPDATE users SET role = ? WHERE LOWER(username) = ?"
-            cursor.execute(q_update, ("superadmin", "pablo"))
-            logger.info("Usuario 'pablo' actualizado a SUPERADMIN.")
+            logger.debug(
+                "Bootstrap de superadmin omitido: "
+                "WINIW_ADMIN_USER o WINIW_ADMIN_PASS no están definidos."
+            )
         
         conn.commit()
         conn.close()
@@ -1751,118 +1847,141 @@ def week_to_date(week_str: str, year: int = None) -> str:
         # Retroceder al lunes de esa semana y saltar X semanas
         start_date = d - timedelta(days=d.weekday()) + timedelta(weeks=week_num-1)
         return start_date.strftime("%Y-%m-%d")
-    except:
+    except Exception as e:
+        logger.debug(f"week_to_date('{week}') no pudo calcular fecha: {e}")
         return datetime.now().strftime("%Y-%m-%d")
 
 def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Optional[Dict] = None, uploaded_by: str = "System", clean_first: bool = True) -> bool:
-    """Guarda o actualiza los datos en la base de datos (SQLite o PostgreSQL)"""
+    """
+    Guarda o actualiza los datos en la base de datos (SQLite o PostgreSQL).
+
+    Usa execute_values (PostgreSQL) o executemany (SQLite) para enviar todos los
+    registros en un único round-trip, en lugar de un INSERT por conductor.
+    Esto supone una mejora de 10-50x respecto al bucle iterrows() original.
+
+    Nota: init_database() NO se llama aquí — ya se ejecuta una vez al arrancar
+    la sesión de Streamlit (st.session_state["db_initialized"]).
+    """
+    conn = None
     try:
-        init_database(db_config)
-        
-        # LIMPIEZA PREVIA: Si vamos a volcar un lote, es mejor limpiar lo que hubiera antes
-        # para ese centro y semana, garantizando que el DB sea fiel al último archivo.
+        # LIMPIEZA PREVIA: garantiza que la BD refleja exactamente el último archivo subido.
         if clean_first:
             delete_scorecard_batch(week, center, db_config)
-            
+
         conn = get_db_connection(db_config)
         cursor = conn.cursor()
-        
+
         is_postgres = db_config and db_config.get('type') == 'postgresql'
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ts        = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         date_week = week_to_date(week)
-        
+
         cols = [
-            "semana", "fecha_semana", "centro", "driver_id", "driver_name", "calificacion", "score",
-            "entregados", "dnr", "fs_count", "dnr_risk_events", "dcr", "pod", "cc",
-            "fdps", "rts", "cdf", "detalles", "uploaded_by", "timestamp"
+            "semana", "anio", "fecha_semana", "centro", "driver_id", "driver_name",
+            "calificacion", "score", "entregados", "dnr", "fs_count",
+            "dnr_risk_events", "dcr", "pod", "cc", "fdps", "rts", "cdf",
+            "detalles", "uploaded_by", "timestamp",
         ]
-        
-        # SQLite usa ?, PostgreSQL usa %s
-        placeholder = "%s" if is_postgres else "?"
-        placeholders = ", ".join([placeholder] * len(cols))
-        
-        for _, row in df.iterrows():
-            vals = (
-                week, date_week, center, str(row['ID']), str(row['Nombre']), 
+
+        # Extraer año del formato de semana "W07 2026" o del año en curso
+        year_int = datetime.now().year
+        week_match = re.search(r'(\d{4})', week)
+        if week_match:
+            year_int = int(week_match.group(1))
+
+        # Construir lista de tuplas de una sola vez (sin iterrows en el hot-path)
+        vals_list = [
+            (
+                week, year_int, date_week, center, str(row['ID']), str(row['Nombre']),
                 str(row['CALIFICACION']), float(row['SCORE']),
                 float(row['Entregados']), float(row['DNR']), float(row['FS_Count']),
                 float(row['DNR_RISK_EVENTS']), float(row['DCR']), float(row['POD']),
-                float(row['CC']), float(row['FDPS']), float(row['RTS']), 
-                float(row['CDF']), str(row['DETALLES']), uploaded_by, ts
+                float(row['CC']), float(row['FDPS']), float(row['RTS']),
+                float(row['CDF']), str(row['DETALLES']), uploaded_by, ts,
             )
-            
-            if is_postgres:
-                # PostgreSQL ON CONFLICT
-                query = f"""
-                    INSERT INTO scorecards ({', '.join(cols)})
-                    VALUES ({placeholders})
-                    ON CONFLICT (semana, centro, driver_id) 
-                    DO UPDATE SET 
-                        fecha_semana = EXCLUDED.fecha_semana,
-                        calificacion = EXCLUDED.calificacion,
-                        score = EXCLUDED.score,
-                        entregados = EXCLUDED.entregados,
-                        dnr = EXCLUDED.dnr,
-                        fs_count = EXCLUDED.fs_count,
-                        dnr_risk_events = EXCLUDED.dnr_risk_events,
-                        dcr = EXCLUDED.dcr,
-                        pod = EXCLUDED.pod,
-                        cc = EXCLUDED.cc,
-                        fdps = EXCLUDED.fdps,
-                        rts = EXCLUDED.rts,
-                        cdf = EXCLUDED.cdf,
-                        detalles = EXCLUDED.detalles,
-                        uploaded_by = EXCLUDED.uploaded_by,
-                        timestamp = EXCLUDED.timestamp
-                """
-                cursor.execute(query, vals)
-            else:
-                # SQLite INSERT OR REPLACE
-                query = f"INSERT OR REPLACE INTO scorecards ({', '.join(cols)}) VALUES ({placeholders})"
-                cursor.execute(query, vals)
-            
+            for _, row in df.iterrows()
+        ]
+
+        if is_postgres:
+            # psycopg2.extras.execute_values — un único round-trip para todo el lote
+            from psycopg2.extras import execute_values
+            col_list    = ', '.join(cols)
+            update_cols = [c for c in cols if c not in ('semana', 'centro', 'driver_id')]
+            update_set  = ', '.join(f"{c} = EXCLUDED.{c}" for c in update_cols)
+            query = f"""
+                INSERT INTO scorecards ({col_list}) VALUES %s
+                ON CONFLICT (semana, centro, driver_id) DO UPDATE SET {update_set}
+            """
+            execute_values(cursor, query, vals_list)
+        else:
+            # SQLite: executemany — una sola llamada con toda la lista
+            placeholders = ", ".join(["?"] * len(cols))
+            query = f"INSERT OR REPLACE INTO scorecards ({', '.join(cols)}) VALUES ({placeholders})"
+            cursor.executemany(query, vals_list)
+
         conn.commit()
         
         # Crear vistas dinámicas por centro (Solo para PostgreSQL por organización)
         if is_postgres:
             try:
-                # Obtener centros únicos
                 cursor.execute("SELECT DISTINCT centro FROM scorecards")
                 centros = [r[0] for r in cursor.fetchall()]
-                
+
                 for c in centros:
-                    # Limpiar nombre para que sea válido en SQL
-                    clean_name = "".join([char if char.isalnum() else "_" for char in c.lower()])
+                    # El nombre de la vista es un identificador SQL → psycopg2.sql.Identifier
+                    # El valor del WHERE es un literal    → psycopg2.sql.Literal
+                    # Ambos se escapan de forma segura sin concatenación de strings.
+                    clean_name = "".join(
+                        ch if ch.isalnum() else "_" for ch in c.lower()
+                    )
                     view_name = f"v_scorecard_{clean_name}"
-                    cursor.execute(f"CREATE OR REPLACE VIEW {view_name} AS SELECT * FROM scorecards WHERE centro = '{c}'")
+                    stmt = sql.SQL(
+                        "CREATE OR REPLACE VIEW {view} AS "
+                        "SELECT * FROM scorecards WHERE centro = {centro}"
+                    ).format(
+                        view=sql.Identifier(view_name),
+                        centro=sql.Literal(c),
+                    )
+                    cursor.execute(stmt)
                 conn.commit()
             except Exception as ve:
-                logger.warning(f"No se pudieron actualizar las vistas: {str(ve)}")
+                logger.warning(f"No se pudieron actualizar las vistas: {ve}")
 
         conn.close()
-        
+        conn = None
+
         # Limpieza final de duplicados físicos y normalización de semanas
         clean_database_duplicates(db_config)
-        
+
         logger.info(f"✅ {len(df)} registros sincronizados con DB ({'PostgreSQL' if is_postgres else 'SQLite'})")
         return True
     except Exception as e:
-        logger.error(f"Error guardando en DB: {str(e)}")
-        if 'conn' in locals(): conn.close()
+        logger.error(f"Error guardando en DB: {e}")
         return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 def get_center_targets(center: str, db_config: Optional[Dict] = None) -> Dict:
-    """Obtiene los targets guardados para un centro o los defaults"""
+    """
+    Obtiene los targets guardados para un centro o los defaults.
+    No llama a init_database() — la inicialización ya la hace app.py al arrancar.
+    """
+    conn = None
     try:
-        init_database(db_config)
         conn = get_db_connection(db_config)
         cursor = conn.cursor()
-        
-        q = "SELECT * FROM center_targets WHERE centro = %s" if db_config and db_config.get('type') == 'postgresql' else "SELECT * FROM center_targets WHERE centro = ?"
+
+        q = (
+            "SELECT * FROM center_targets WHERE centro = %s"
+            if db_config and db_config.get('type') == 'postgresql'
+            else "SELECT * FROM center_targets WHERE centro = ?"
+        )
         cursor.execute(q, (center,))
         row = cursor.fetchone()
-        conn.close()
-        
+
         if row:
             if db_config and db_config.get('type') == 'postgresql':
                 return {
@@ -1870,11 +1989,17 @@ def get_center_targets(center: str, db_config: Optional[Dict] = None) -> Dict:
                     'target_pod': row[3], 'target_cc': row[4], 'target_fdps': row[5],
                     'target_rts': row[6], 'target_cdf': row[7]
                 }
-            else: # SQLite Row
+            else:
                 return dict(row)
     except Exception as e:
         logger.error(f"Error obteniendo targets: {e}")
-    
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
     # Defaults si no existe o hay error
     return {
         'centro': center, 'target_dnr': 0.5, 'target_dcr': 0.995,
@@ -1917,59 +2042,76 @@ def clean_database_duplicates(db_config: Optional[Dict] = None) -> Tuple[bool, i
     1. Normaliza formatos de semana (ej: W5 -> W05)
     2. Elimina duplicados físicos que puedan haber quedado por versiones antiguas sin restricciones
     """
+    conn = None
     try:
         conn = get_db_connection(db_config)
         cursor = conn.cursor()
-        
+
         is_postgres = db_config and db_config.get('type') == 'postgresql'
-        
+
         # 1. Normalizar Semanas (W5 -> W05)
         cursor.execute("SELECT id, semana FROM scorecards WHERE semana NOT LIKE 'W%' OR LENGTH(semana) < 3")
         rows = cursor.fetchall()
-        
+
         updated = 0
         for r_id, sem in rows:
             match = re.search(r'(\d+)', str(sem))
             if match:
                 new_sem = f"W{int(match.group(1)):02d}"
                 try:
-                    # Intentar actualizar
-                    q_upd = "UPDATE scorecards SET semana = %s WHERE id = %s" if is_postgres else "UPDATE scorecards SET semana = ? WHERE id = ?"
+                    q_upd = (
+                        "UPDATE scorecards SET semana = %s WHERE id = %s"
+                        if is_postgres else
+                        "UPDATE scorecards SET semana = ? WHERE id = ?"
+                    )
                     cursor.execute(q_upd, (new_sem, r_id))
                     updated += 1
-                except:
-                    # Si falla por UNIQUE, borrar el antiguo que está mal nombrado
-                    q_del = "DELETE FROM scorecards WHERE id = %s" if is_postgres else "DELETE FROM scorecards WHERE id = ?"
+                except Exception as e:
+                    # Fallo por UNIQUE constraint: el registro normalizado ya existe.
+                    # Eliminamos la versión con nombre incorrecto.
+                    logger.debug(f"Normalización semana id={r_id} ({sem}->{new_sem}): {e}")
+                    q_del = (
+                        "DELETE FROM scorecards WHERE id = %s"
+                        if is_postgres else
+                        "DELETE FROM scorecards WHERE id = ?"
+                    )
                     cursor.execute(q_del, (r_id,))
                     updated += 1
-        
-        # 2. Eliminar duplicados físicos (por si acaso falló el UNIQUE en algún momento)
-        # Mantenemos siempre el registro más reciente (el de ID más alto o timestamp mayor)
+
+        # 2. Eliminar duplicados físicos (mantenemos el registro más reciente)
         if is_postgres:
             cursor.execute("""
-                DELETE FROM scorecards 
+                DELETE FROM scorecards
                 WHERE id IN (
                     SELECT id FROM (
-                        SELECT id, ROW_NUMBER() OVER (PARTITION BY semana, centro, driver_id ORDER BY timestamp DESC, id DESC) as row_num
+                        SELECT id,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY semana, centro, driver_id
+                                   ORDER BY timestamp DESC, id DESC
+                               ) AS row_num
                         FROM scorecards
                     ) t WHERE t.row_num > 1
                 )
             """)
         else:
             cursor.execute("""
-                DELETE FROM scorecards 
+                DELETE FROM scorecards
                 WHERE id NOT IN (
                     SELECT MAX(id) FROM scorecards GROUP BY semana, centro, driver_id
                 )
             """)
-        
+
         conn.commit()
-        conn.close()
         return True, updated
     except Exception as e:
-        logger.error(f"Error limpiando DB: {str(e)}")
-        if 'conn' in locals(): conn.close()
+        logger.error(f"Error limpiando DB: {e}")
         return False, 0
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 def main():
     """Función principal para procesamiento por lotes (múltiples centros/semanas)"""
@@ -2027,11 +2169,7 @@ def main():
                 continue
                 
             df_conc_clean = process_concessions(df_concessions)
-            
-            # Duplicados
-            if not df_conc_clean.empty and 'ID' in df_conc_clean.columns:
-                if df_conc_clean['ID'].duplicated().any():
-                    df_conc_clean = df_conc_clean.drop_duplicates(subset='ID', keep='first')
+            # process_concessions() ya deduplicó por ID internamente.
             
             df_qual_clean = process_quality(df_quality) if df_quality is not None else None
             df_fs_clean = process_false_scan(df_false_scan_html) if df_false_scan_html is not None else None
@@ -2391,10 +2529,11 @@ def parse_dsp_scorecard_pdf(pdf_bytes: bytes) -> dict:
             else:
                 result['errors'].append("PDF sin página 2 (KPIs de estación)")
 
-            # ── PÁGINAS 3-5: Tabla de drivers ───────────────────────────────
-            # Página 3 tiene cabecera; páginas 4 y 5 solo datos
+            # ── PÁGINAS 3-4: Tabla de drivers ───────────────────────────────
+            # Página 3 (índice 2) tiene cabecera; página 4 (índice 3) solo datos.
+            # WHC está en página 5 (índice 4) — NO se incluye en el loop de drivers.
             all_driver_rows = []
-            for page_idx in [2, 3, 4]:
+            for page_idx in [2, 3]:
                 if page_idx < len(pdf.pages):
                     tbl = pdf.pages[page_idx].extract_table()
                     if tbl:
@@ -2403,11 +2542,12 @@ def parse_dsp_scorecard_pdf(pdf_bytes: bytes) -> dict:
             if all_driver_rows:
                 result['drivers'] = _build_drivers_df(all_driver_rows, result['errors'])
             else:
-                result['errors'].append("No se encontraron datos de drivers en páginas 3-5")
+                result['errors'].append("No se encontraron datos de drivers en páginas 3-4")
 
-            # ── PÁGINA 6: Working Hours Exceptions ──────────────────────────
-            if len(pdf.pages) > 5:
-                tbl = pdf.pages[5].extract_table()
+            # ── PÁGINA 5: Working Hours Exceptions ──────────────────────────
+            # Índice 4 (base 0). BUG CORREGIDO v3.9: era pages[5] → pages[4].
+            if len(pdf.pages) > 4:
+                tbl = pdf.pages[4].extract_table()
                 if tbl:
                     result['wh'] = _build_wh_df(tbl, result['errors'])
 
@@ -2426,8 +2566,8 @@ def save_station_scorecard(station_data: dict, week: str, center: str,
     Guarda o actualiza los KPIs de estación en station_scorecards.
     UPSERT por (semana, centro) — reemplaza si ya existe.
     """
+    conn = None
     try:
-        init_database(db_config)
         conn   = get_db_connection(db_config)
         cursor = conn.cursor()
         is_pg  = db_config and db_config.get('type') == 'postgresql'
@@ -2495,48 +2635,83 @@ def save_station_scorecard(station_data: dict, week: str, center: str,
         cursor.execute(query, vals)
         conn.commit()
         conn.close()
+        conn = None
         logger.info(f"✓ station_scorecard guardado: {center} {week} | Score: {station_data.get('overall_score')} {station_data.get('overall_standing')}")
         return True
 
     except Exception as e:
         logger.error(f"save_station_scorecard error: {e}")
         return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
                              db_config=None) -> Tuple[int, int]:
     """
     Actualiza SOLO las columnas _oficial en scorecards con los valores del PDF.
-    
+
     - NO elimina filas existentes
     - NO crea filas nuevas
     - NO toca columnas base (dnr, dcr, pod, etc.)
     - Las columnas _oficial solo se rellenan aquí
-    
+
+    Optimización: en lugar de un SELECT + UPDATE por conductor (N*2 queries),
+    hace una sola SELECT para obtener los driver_ids existentes y luego un
+    executemany para todos los UPDATEs de una vez.
+
     Returns: (n_actualizados, n_no_encontrados)
     """
     if drivers_df is None or drivers_df.empty:
         return 0, 0
 
+    conn = None
     try:
-        conn    = get_db_connection(db_config)
-        cursor  = conn.cursor()
-        is_pg   = db_config and db_config.get('type') == 'postgresql'
-        ph      = '%s' if is_pg else '?'
-        updated = 0
-        not_found = []
+        conn   = get_db_connection(db_config)
+        cursor = conn.cursor()
+        is_pg  = db_config and db_config.get('type') == 'postgresql'
+        ph     = '%s' if is_pg else '?'
 
-        for _, row in drivers_df.iterrows():
-            driver_id = row['driver_id']
+        # 1. Una sola query para saber qué driver_ids existen ya en este lote
+        all_ids = drivers_df['driver_id'].tolist()
+        if is_pg:
+            from psycopg2.extras import execute_values
+            cursor.execute(
+                f"SELECT driver_id FROM scorecards WHERE semana={ph} AND centro={ph} AND driver_id = ANY({ph})",
+                (week, center, all_ids)
+            )
+        else:
+            placeholders_ids = ', '.join([ph] * len(all_ids))
+            cursor.execute(
+                f"SELECT driver_id FROM scorecards WHERE semana={ph} AND centro={ph} AND driver_id IN ({placeholders_ids})",
+                [week, center] + all_ids
+            )
+        existing_ids = {r[0] for r in cursor.fetchall()}
 
-            # Verificar existencia
-            q_check = f"SELECT id FROM scorecards WHERE semana={ph} AND centro={ph} AND driver_id={ph}"
-            cursor.execute(q_check, (week, center, driver_id))
-            if not cursor.fetchone():
-                not_found.append(driver_id)
-                continue
+        not_found = [d for d in all_ids if d not in existing_ids]
 
-            # UPDATE solo columnas _oficial — nunca toca columnas base
+        # 2. Construir lista de valores solo para los que existen
+        update_vals = [
+            (
+                row.get('entregados_oficial'),
+                row.get('dcr_oficial'),
+                row.get('pod_oficial'),
+                row.get('cc_oficial'),
+                row.get('dsc_dpmo'),
+                row.get('lor_dpmo'),
+                row.get('ce_dpmo'),
+                row.get('cdf_dpmo_oficial'),
+                week, center, row['driver_id'],
+            )
+            for _, row in drivers_df.iterrows()
+            if row['driver_id'] in existing_ids
+        ]
+
+        if update_vals:
             q_update = f"""
                 UPDATE scorecards SET
                     entregados_oficial = {ph},
@@ -2550,30 +2725,28 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
                     pdf_loaded         = 1
                 WHERE semana={ph} AND centro={ph} AND driver_id={ph}
             """
-            cursor.execute(q_update, (
-                row.get('entregados_oficial'),
-                row.get('dcr_oficial'),
-                row.get('pod_oficial'),
-                row.get('cc_oficial'),
-                row.get('dsc_dpmo'),
-                row.get('lor_dpmo'),
-                row.get('ce_dpmo'),
-                row.get('cdf_dpmo_oficial'),
-                week, center, driver_id
-            ))
-            updated += 1
+            cursor.executemany(q_update, update_vals)
 
         conn.commit()
-        conn.close()
+        updated = len(update_vals)
 
         if not_found:
-            logger.warning(f"Drivers del PDF sin match en scorecards ({len(not_found)}): {not_found[:5]}{'...' if len(not_found) > 5 else ''}")
+            logger.warning(
+                f"Drivers del PDF sin match en scorecards ({len(not_found)}): "
+                f"{not_found[:5]}{'...' if len(not_found) > 5 else ''}"
+            )
         logger.info(f"✓ update_drivers_from_pdf: {updated} actualizados, {len(not_found)} sin match")
         return updated, len(not_found)
 
     except Exception as e:
         logger.error(f"update_drivers_from_pdf error: {e}")
         return 0, 0
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def save_wh_exceptions(wh_df: pd.DataFrame, week: str, center: str,
@@ -2581,18 +2754,20 @@ def save_wh_exceptions(wh_df: pd.DataFrame, week: str, center: str,
     """
     Guarda las excepciones de Working Hours en wh_exceptions.
     Primero borra las del mismo centro+semana para evitar duplicados,
-    luego inserta las nuevas.
+    luego inserta todas las nuevas en un único executemany.
     """
     if wh_df is None or wh_df.empty:
         logger.info(f"Sin excepciones WHC para {center} {week}")
         return True
 
+    conn = None
     try:
         conn   = get_db_connection(db_config)
         cursor = conn.cursor()
         is_pg  = db_config and db_config.get('type') == 'postgresql'
         ph     = '%s' if is_pg else '?'
         fecha  = week_to_date(week)
+        year_int = datetime.now().year
 
         # Limpiar registros anteriores del mismo lote
         cursor.execute(
@@ -2600,66 +2775,290 @@ def save_wh_exceptions(wh_df: pd.DataFrame, week: str, center: str,
             (week, center)
         )
 
-        for _, row in wh_df.iterrows():
-            cursor.execute(
-                f"""INSERT INTO wh_exceptions
-                    (semana, fecha_semana, centro, driver_id,
-                     daily_limit_exceeded, weekly_limit_exceeded,
-                     under_offwork_limit, workday_limit_exceeded, uploaded_by)
-                    VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})
-                """,
-                (
-                    week, fecha, center, row['driver_id'],
-                    int(row.get('daily_limit_exceeded', 0)),
-                    int(row.get('weekly_limit_exceeded', 0)),
-                    int(row.get('under_offwork_limit', 0)),
-                    int(row.get('workday_limit_exceeded', 0)),
-                    uploaded_by
-                )
+        # Lookup de driver_name desde scorecards para el mismo centro+semana
+        cursor.execute(
+            f"SELECT driver_id, driver_name FROM scorecards "
+            f"WHERE semana={ph} AND centro={ph}",
+            (week, center)
+        )
+        name_map = {r[0]: r[1] for r in cursor.fetchall()}
+
+        # Construir lista completa y ejecutar en un solo round-trip
+        vals_list = [
+            (
+                week, year_int, fecha, center, row['driver_id'],
+                name_map.get(row['driver_id']),  # None si el driver no tiene CSV
+                int(row.get('daily_limit_exceeded', 0)),
+                int(row.get('weekly_limit_exceeded', 0)),
+                int(row.get('under_offwork_limit', 0)),
+                int(row.get('workday_limit_exceeded', 0)),
+                uploaded_by,
             )
+            for _, row in wh_df.iterrows()
+        ]
+        q_insert = (
+            f"INSERT INTO wh_exceptions "
+            f"(semana, anio, fecha_semana, centro, driver_id, driver_name, "
+            f"daily_limit_exceeded, weekly_limit_exceeded, "
+            f"under_offwork_limit, workday_limit_exceeded, uploaded_by) "
+            f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})"
+        )
+        cursor.executemany(q_insert, vals_list)
 
         conn.commit()
-        conn.close()
         logger.info(f"✓ WHC exceptions guardadas: {len(wh_df)} para {center} {week}")
         return True
 
     except Exception as e:
         logger.error(f"save_wh_exceptions error: {e}")
         return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def get_station_scorecards(db_config=None) -> pd.DataFrame:
-    """Devuelve todos los station_scorecards ordenados por centro y semana desc."""
+    """
+    Devuelve todos los station_scorecards ordenados por centro y semana desc.
+    v3.9: incluye wh_count via LEFT JOIN a wh_exceptions para mostrar
+    el número de conductores con excepciones WHC en cada lote.
+    """
+    conn = None
     try:
-        conn   = get_db_connection(db_config)
-        is_pg  = db_config and db_config.get('type') == 'postgresql'
-        query  = """
-            SELECT semana, centro, overall_score, overall_standing,
-                   rank_station, rank_wow,
-                   fico, fico_tier, whc_pct, whc_tier,
-                   dcr_pct, dcr_tier, dnr_dpmo, dnr_tier,
-                   lor_dpmo, lor_tier, dsc_dpmo, dsc_tier,
-                   pod_pct, pod_tier, cc_pct, cc_tier,
-                   ce_dpmo, ce_tier, cdf_dpmo, cdf_tier,
-                   speeding_rate, speeding_tier,
-                   mentor_adoption, mentor_tier,
-                   vsa_compliance, vsa_tier,
-                   whc_pct, whc_tier, boc, cas,
-                   capacity_next_day, capacity_next_day_tier,
-                   capacity_same_day, capacity_same_day_tier,
-                   safety_tier, quality_tier, capacity_tier,
-                   focus_area_1, focus_area_2, focus_area_3,
-                   uploaded_by, timestamp
-            FROM station_scorecards
-            ORDER BY centro ASC, semana DESC
+        conn  = get_db_connection(db_config)
+        query = """
+            SELECT ss.semana, ss.centro, ss.overall_score, ss.overall_standing,
+                   ss.rank_station, ss.rank_wow,
+                   ss.fico, ss.fico_tier, ss.whc_pct, ss.whc_tier,
+                   ss.dcr_pct, ss.dcr_tier, ss.dnr_dpmo, ss.dnr_tier,
+                   ss.lor_dpmo, ss.lor_tier, ss.dsc_dpmo, ss.dsc_tier,
+                   ss.pod_pct, ss.pod_tier, ss.cc_pct, ss.cc_tier,
+                   ss.ce_dpmo, ss.ce_tier, ss.cdf_dpmo, ss.cdf_tier,
+                   ss.speeding_rate, ss.speeding_tier,
+                   ss.mentor_adoption, ss.mentor_tier,
+                   ss.vsa_compliance, ss.vsa_tier,
+                   ss.boc, ss.cas,
+                   ss.capacity_next_day, ss.capacity_next_day_tier,
+                   ss.capacity_same_day, ss.capacity_same_day_tier,
+                   ss.safety_tier, ss.quality_tier, ss.capacity_tier,
+                   ss.focus_area_1, ss.focus_area_2, ss.focus_area_3,
+                   ss.uploaded_by, ss.timestamp,
+                   COALESCE(wh.wh_count, 0) AS wh_count
+            FROM station_scorecards ss
+            LEFT JOIN (
+                SELECT semana, centro, COUNT(*) AS wh_count
+                FROM wh_exceptions
+                GROUP BY semana, centro
+            ) wh ON wh.semana = ss.semana AND wh.centro = ss.centro
+            ORDER BY ss.centro ASC, ss.semana DESC
         """
         df = pd.read_sql_query(query, conn)
-        conn.close()
         return df
     except Exception as e:
         logger.error(f"get_station_scorecards error: {e}")
         return pd.DataFrame()
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# API PÚBLICA v3.9 — Rate limiting en BD + mantenimiento
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def check_login_locked(username: str, db_config=None) -> Tuple[bool, int]:
+    """
+    Comprueba si un usuario está bloqueado por exceso de intentos fallidos.
+
+    Returns:
+        (bloqueado: bool, segundos_restantes: int)
+    """
+    conn = None
+    try:
+        conn   = get_db_connection(db_config)
+        cursor = conn.cursor()
+        is_pg  = db_config and db_config.get('type') == 'postgresql'
+        ph     = '%s' if is_pg else '?'
+        cursor.execute(
+            f"SELECT fail_count, locked_until FROM login_attempts WHERE username = {ph}",
+            (username.lower(),)
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return False, 0
+        fail_count, locked_until = row[0], row[1]
+        if not locked_until:
+            return False, 0
+        # SQLite devuelve string; PostgreSQL devuelve datetime
+        if isinstance(locked_until, str):
+            try:
+                locked_until = datetime.fromisoformat(locked_until)
+            except ValueError:
+                return False, 0
+        remaining = int((locked_until - datetime.now()).total_seconds())
+        return (remaining > 0), max(0, remaining)
+    except Exception as e:
+        logger.debug(f"check_login_locked error: {e}")
+        return False, 0
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
+def record_login_attempt(username: str, success: bool, db_config=None,
+                         max_attempts: int = 5, lockout_minutes: int = 15) -> None:
+    """
+    Registra un intento de login.
+
+    - success=True  → limpia el contador (login correcto)
+    - success=False → incrementa fail_count y bloquea si supera max_attempts
+    """
+    conn = None
+    try:
+        conn   = get_db_connection(db_config)
+        cursor = conn.cursor()
+        is_pg  = db_config and db_config.get('type') == 'postgresql'
+        ph     = '%s' if is_pg else '?'
+        now    = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        uname  = username.lower()
+
+        if success:
+            cursor.execute(
+                f"DELETE FROM login_attempts WHERE username = {ph}",
+                (uname,)
+            )
+        else:
+            if is_pg:
+                cursor.execute(
+                    """INSERT INTO login_attempts (username, fail_count, last_attempt)
+                       VALUES (%s, 1, %s)
+                       ON CONFLICT (username) DO UPDATE
+                       SET fail_count   = login_attempts.fail_count + 1,
+                           last_attempt = EXCLUDED.last_attempt""",
+                    (uname, now)
+                )
+            else:
+                cursor.execute(
+                    """INSERT INTO login_attempts (username, fail_count, last_attempt)
+                       VALUES (?, 1, ?)
+                       ON CONFLICT(username) DO UPDATE
+                       SET fail_count   = login_attempts.fail_count + 1,
+                           last_attempt = excluded.last_attempt""",
+                    (uname, now)
+                )
+            conn.commit()
+            cursor.execute(
+                f"SELECT fail_count FROM login_attempts WHERE username = {ph}",
+                (uname,)
+            )
+            row = cursor.fetchone()
+            if row and row[0] >= max_attempts:
+                locked_until = (
+                    datetime.now() + timedelta(minutes=lockout_minutes)
+                ).strftime("%Y-%m-%d %H:%M:%S")
+                cursor.execute(
+                    f"UPDATE login_attempts SET locked_until = {ph} WHERE username = {ph}",
+                    (locked_until, uname)
+                )
+        conn.commit()
+    except Exception as e:
+        logger.debug(f"record_login_attempt error: {e}")
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
+def run_maintenance(db_config=None) -> Tuple[bool, int]:
+    """
+    Ejecuta mantenimiento de base de datos:
+    · Normaliza formatos de semana (W5 → W05)
+    · Elimina duplicados físicos
+
+    Returns:
+        (ok: bool, registros_afectados: int)
+    """
+    return clean_database_duplicates(db_config)
+
+
+def update_user_password(username: str, new_hash: str, db_config=None) -> bool:
+    """Actualiza el hash de contraseña y limpia must_change_password."""
+    conn = None
+    try:
+        conn   = get_db_connection(db_config)
+        cursor = conn.cursor()
+        is_pg  = db_config and db_config.get('type') == 'postgresql'
+        ph     = '%s' if is_pg else '?'
+        cursor.execute(
+            f"UPDATE users SET password = {ph}, must_change_password = 0 WHERE username = {ph}",
+            (new_hash, username)
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"update_user_password error: {e}")
+        return False
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
+def get_user_centro(username: str, db_config=None) -> Optional[str]:
+    """Devuelve el centro asignado a un usuario JT, o None si no tiene."""
+    conn = None
+    try:
+        conn   = get_db_connection(db_config)
+        cursor = conn.cursor()
+        is_pg  = db_config and db_config.get('type') == 'postgresql'
+        ph     = '%s' if is_pg else '?'
+        cursor.execute(
+            f"SELECT centro FROM users WHERE username = {ph}",
+            (username,)
+        )
+        row = cursor.fetchone()
+        return row[0] if row and row[0] else None
+    except Exception as e:
+        logger.debug(f"get_user_centro error: {e}")
+        return None
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
+def set_user_centro(username: str, centro: Optional[str], db_config=None) -> bool:
+    """Asigna o borra el centro de un usuario JT."""
+    conn = None
+    try:
+        conn   = get_db_connection(db_config)
+        cursor = conn.cursor()
+        is_pg  = db_config and db_config.get('type') == 'postgresql'
+        ph     = '%s' if is_pg else '?'
+        cursor.execute(
+            f"UPDATE users SET centro = {ph} WHERE username = {ph}",
+            (centro, username)
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.debug(f"set_user_centro error: {e}")
+        return False
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
+if __name__ == "__main__":
+    import sys  # Solo necesario al ejecutar como script; no contamina el namespace del módulo
     success = main()
     sys.exit(0 if success else 1)

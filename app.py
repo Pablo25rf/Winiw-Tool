@@ -14,28 +14,32 @@ v3.5 (este archivo):
   - 📊 CÓDIGO: SEMANAS_VISIBLES_JT y TREND_SEMANAS_MAX como constantes configurables
 """
 
-import streamlit as st
-import pandas as pd
-import amazon_scorecard_ultra_robust_v3_FINAL as scorecard
 import io
 import re
 import os
 import logging
-import textwrap
 from datetime import datetime, timedelta
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOGGING — Configuración CENTRALIZADA antes de cualquier import interno.
+# scorecard.py solo llama a logging.getLogger(__name__) sin basicConfig propio.
+# ─────────────────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("logs/winiw_app.log", mode='a', encoding='utf-8')
+        if os.path.isdir("logs") else logging.StreamHandler()
+    ]
+)
+
+import streamlit as st
+import pandas as pd
+import amazon_scorecard_ultra_robust_v3_FINAL as scorecard  # noqa: E402 (import after logging setup)
 
 # Logger de auditoría de la app (separado del motor)
 _log = logging.getLogger("winiw_app")
-if not _log.handlers:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler("logs/winiw_app.log", mode='a', encoding='utf-8')
-            if os.path.isdir("logs") else logging.StreamHandler()
-        ]
-    )
 
 def _audit(msg: str):
     """Log de auditoría: registra quién hizo qué y cuándo."""
@@ -43,38 +47,121 @@ def _audit(msg: str):
     _log.info(f"[{user}] {msg}")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# RATE LIMITING (módulo-nivel — compartido entre todas las sesiones del proceso)
+# RATE LIMITING — persistido en la tabla login_attempts de la BD
 # ─────────────────────────────────────────────────────────────────────────────
-# Diccionario: { username_lower: {"count": int, "locked_until": datetime|None} }
-# Al ser módulo-nivel, persiste entre rerenders y entre usuarios del mismo servidor.
-_LOGIN_ATTEMPTS: dict = {}
+# El dict en memoria anterior (_LOGIN_ATTEMPTS) se perdía al reiniciar el servidor
+# y era invisible entre workers distintos del mismo proceso Streamlit.
+# La tabla login_attempts garantiza que el bloqueo es global y durable.
+# ─────────────────────────────────────────────────────────────────────────────
 MAX_LOGIN_ATTEMPTS    = 5        # intentos fallidos antes del bloqueo
 LOGIN_LOCKOUT_MINUTES = 15       # minutos de bloqueo tras agotar intentos
 
 
+def _rate_limit_row(uname: str) -> dict | None:
+    """Lee la fila de login_attempts para un username. None si no existe."""
+    try:
+        conn   = scorecard.get_db_connection(db_config)
+        cursor = conn.cursor()
+        ph     = "%s" if db_config['type'] == 'postgresql' else "?"
+        cursor.execute(
+            f"SELECT fail_count, locked_until FROM login_attempts WHERE username = {ph}",
+            (uname.lower(),)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if row is None:
+            return None
+        return {"count": row[0], "locked_until": row[1]}
+    except Exception as e:
+        _log.warning(f"_rate_limit_row error: {e}")
+        return None
+
+
 def _is_locked(uname: str) -> tuple[bool, int]:
     """Devuelve (bloqueado, segundos_restantes)."""
-    entry = _LOGIN_ATTEMPTS.get(uname)
-    if not entry:
+    row = _rate_limit_row(uname)
+    if not row or not row["locked_until"]:
         return False, 0
-    if entry.get("locked_until") and datetime.now() < entry["locked_until"]:
-        remaining = int((entry["locked_until"] - datetime.now()).total_seconds())
-        return True, remaining
+    lu = row["locked_until"]
+    # SQLite devuelve string; PostgreSQL devuelve datetime
+    if isinstance(lu, str):
+        try:
+            lu = datetime.fromisoformat(lu)
+        except ValueError:
+            return False, 0
+    if datetime.now() < lu:
+        return True, int((lu - datetime.now()).total_seconds())
     return False, 0
 
 
 def _register_failed_attempt(uname: str):
     """Registra un intento fallido y bloquea si se superan MAX_LOGIN_ATTEMPTS."""
-    entry = _LOGIN_ATTEMPTS.setdefault(uname, {"count": 0, "locked_until": None})
-    entry["count"] += 1
-    if entry["count"] >= MAX_LOGIN_ATTEMPTS:
-        entry["locked_until"] = datetime.now() + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
-        _log.warning(f"[RATE LIMIT] '{uname}' bloqueado por {LOGIN_LOCKOUT_MINUTES} min tras {entry['count']} intentos")
+    try:
+        conn   = scorecard.get_db_connection(db_config)
+        cursor = conn.cursor()
+        is_pg  = db_config['type'] == 'postgresql'
+        ph     = "%s" if is_pg else "?"
+        now    = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # UPSERT: crear o incrementar el contador
+        if is_pg:
+            cursor.execute(
+                """INSERT INTO login_attempts (username, fail_count, last_attempt)
+                   VALUES (%s, 1, %s)
+                   ON CONFLICT (username) DO UPDATE
+                   SET fail_count    = login_attempts.fail_count + 1,
+                       last_attempt  = EXCLUDED.last_attempt""",
+                (uname.lower(), now)
+            )
+        else:
+            cursor.execute(
+                """INSERT INTO login_attempts (username, fail_count, last_attempt)
+                   VALUES (?, 1, ?)
+                   ON CONFLICT(username) DO UPDATE
+                   SET fail_count   = login_attempts.fail_count + 1,
+                       last_attempt = excluded.last_attempt""",
+                (uname.lower(), now)
+            )
+        conn.commit()
+
+        # Leer el contador actualizado para decidir si bloquear
+        cursor.execute(
+            f"SELECT fail_count FROM login_attempts WHERE username = {ph}",
+            (uname.lower(),)
+        )
+        row = cursor.fetchone()
+        if row and row[0] >= MAX_LOGIN_ATTEMPTS:
+            locked_until = (
+                datetime.now() + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
+            ).strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute(
+                f"UPDATE login_attempts SET locked_until = {ph} WHERE username = {ph}",
+                (locked_until, uname.lower())
+            )
+            conn.commit()
+            _log.warning(
+                f"[RATE LIMIT] '{uname}' bloqueado {LOGIN_LOCKOUT_MINUTES} min "
+                f"tras {row[0]} intentos fallidos"
+            )
+        conn.close()
+    except Exception as e:
+        _log.warning(f"_register_failed_attempt error: {e}")
 
 
 def _clear_attempts(uname: str):
     """Limpia el contador tras login exitoso."""
-    _LOGIN_ATTEMPTS.pop(uname, None)
+    try:
+        conn   = scorecard.get_db_connection(db_config)
+        cursor = conn.cursor()
+        ph     = "%s" if db_config['type'] == 'postgresql' else "?"
+        cursor.execute(
+            f"DELETE FROM login_attempts WHERE username = {ph}",
+            (uname.lower(),)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        _log.warning(f"_clear_attempts error: {e}")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIG INICIAL
@@ -130,6 +217,48 @@ def clean_html(html: str) -> str:
 
 
 # ── Caché de datos (TTL 5 min para no saturar Supabase) ──────────────────────
+
+def _clear_all_caches():
+    """
+    Invalida toda la caché de datos de la sesión.
+    Llamar tras cualquier operación que modifique la BD (subida, borrado, targets).
+    Centralizado aquí para no tener que recordar cada función cacheada en cada sitio.
+    """
+    st.cache_data.clear()
+
+@st.cache_data(ttl=60, show_spinner=False)
+def cached_db_status(_db_config_key: str, db_config: dict) -> dict:
+    """
+    Estado del sistema para el sidebar: total de registros, semanas y semana activa.
+    TTL de 60 s — se refresca cada minuto sin ejecutar 3 queries en cada re-render
+    (el sidebar se re-renderiza con cada interacción del usuario).
+    """
+    try:
+        conn   = scorecard.get_db_connection(db_config)
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT COUNT(*) AS n_rec,
+                      COUNT(DISTINCT semana) AS n_weeks
+               FROM scorecards"""
+        )
+        row = cursor.fetchone()
+        # Semana activa = la subida más recientemente
+        cursor.execute(
+            "SELECT semana, MAX(timestamp) AS t "
+            "FROM scorecards GROUP BY semana ORDER BY t DESC LIMIT 1"
+        )
+        latest = cursor.fetchone()
+        conn.close()
+        return {
+            "ok":       True,
+            "n_rec":    row[0] if row else 0,
+            "n_weeks":  row[1] if row else 0,
+            "semana":   latest[0] if latest else None,
+        }
+    except Exception as e:
+        _log.warning(f"cached_db_status error: {e}")
+        return {"ok": False, "n_rec": 0, "n_weeks": 0, "semana": None}
+
 
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_allowed_weeks_jt(_db_config_key: str, db_config: dict) -> list:
@@ -244,70 +373,131 @@ def cached_executive_summary(_db_config_key: str, db_config: dict) -> pd.DataFra
     """
     Resumen ejecutivo: última semana disponible por centro + métricas agregadas.
     Devuelve una fila por centro con: semana_actual, score_medio, dnr_medio, dcr_medio,
-    pod_medio, n_fantastic, n_great, n_fair, n_poor, total_drivers
+    pod_medio, n_fantastic, n_great, n_fair, n_poor, total_drivers, score_prev.
+
+    Implementación anterior: N+1 queries (1 inicial + 3 por centro).
+    Implementación actual:   2 queries totales independientemente del número de centros.
+      · Query 1 — trae la semana más reciente Y la anterior por centro en un solo paso
+                  usando una subquery de ranking por timestamp.
+      · Query 2 — agrega métricas filtrando por los pares (centro, semana) obtenidos.
     """
+    conn = None
     try:
         conn = scorecard.get_db_connection(db_config)
-        # Semana más reciente por centro (por timestamp de subida)
-        df_latest = pd.read_sql_query(
-            """SELECT centro, semana, MAX(timestamp) as t
-               FROM scorecards GROUP BY centro, semana""",
-            conn
-        )
-        if df_latest.empty:
-            conn.close()
+        is_pg = db_config['type'] == 'postgresql'
+
+        # ── Query 1: identificar semana actual y anterior por centro ──────────
+        # Asigna rn=1 a la semana más reciente (por MAX timestamp) y rn=2 a la anterior.
+        if is_pg:
+            q_ranks = """
+                SELECT centro, semana, rn
+                FROM (
+                    SELECT centro, semana,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY centro
+                               ORDER BY MAX(timestamp) DESC
+                           ) AS rn
+                    FROM scorecards
+                    GROUP BY centro, semana
+                ) ranked
+                WHERE rn <= 2
+            """
+        else:
+            # SQLite < 3.25 no tiene window functions; emulamos con subquery de ranking
+            q_ranks = """
+                SELECT s.centro, s.semana,
+                       (SELECT COUNT(DISTINCT semana2)
+                        FROM (
+                            SELECT semana AS semana2, MAX(timestamp) AS t2
+                            FROM scorecards WHERE centro = s.centro GROUP BY semana
+                        ) x WHERE x.t2 >= s.max_t
+                       ) AS rn
+                FROM (
+                    SELECT centro, semana, MAX(timestamp) AS max_t
+                    FROM scorecards GROUP BY centro, semana
+                ) s
+                WHERE rn <= 2
+            """
+
+        df_ranks = pd.read_sql_query(q_ranks, conn)
+        if df_ranks.empty:
             return pd.DataFrame()
 
-        # Para cada centro: quedarse con la semana con timestamp más reciente
-        df_latest = df_latest.sort_values('t', ascending=False).groupby('centro').first().reset_index()
+        latest_rows  = df_ranks[df_ranks['rn'] == 1]
+        prev_rows    = df_ranks[df_ranks['rn'] == 2]
 
-        results = []
-        p = "%s" if db_config['type'] == 'postgresql' else "?"
-        for _, row in df_latest.iterrows():
-            df_c = pd.read_sql_query(
-                f"SELECT * FROM scorecards WHERE centro = {p} AND semana = {p}",
-                conn, params=(row['centro'], row['semana'])
+        # ── Query 2: agregar métricas para semanas actuales ───────────────────
+        # Construimos los pares (centro, semana) como filtro
+        if latest_rows.empty:
+            return pd.DataFrame()
+
+        ph = '%s' if is_pg else '?'
+        pairs_latest = list(zip(latest_rows['centro'], latest_rows['semana']))
+        pairs_prev   = list(zip(prev_rows['centro'],   prev_rows['semana']))
+
+        def fetch_aggregates(pairs: list) -> pd.DataFrame:
+            """Trae métricas agregadas para una lista de pares (centro, semana)."""
+            if not pairs:
+                return pd.DataFrame(columns=['centro', 'semana', 'score_medio',
+                                             'dnr_medio', 'dcr_medio', 'pod_medio',
+                                             'n_fantastic', 'n_great', 'n_fair',
+                                             'n_poor', 'total'])
+            # Construir WHERE con OR para cada par — evita un JOIN complejo
+            where_parts = " OR ".join([f"(centro = {ph} AND semana = {ph})"] * len(pairs))
+            params = [v for pair in pairs for v in pair]
+            q = f"""
+                SELECT
+                    centro,
+                    semana,
+                    ROUND(AVG(score), 1)        AS score_medio,
+                    ROUND(AVG(dnr), 2)           AS dnr_medio,
+                    ROUND(AVG(dcr) * 100, 2)     AS dcr_medio,
+                    ROUND(AVG(pod) * 100, 2)     AS pod_medio,
+                    SUM(CASE WHEN calificacion = '💎 FANTASTIC' THEN 1 ELSE 0 END) AS n_fantastic,
+                    SUM(CASE WHEN calificacion = '🥇 GREAT'     THEN 1 ELSE 0 END) AS n_great,
+                    SUM(CASE WHEN calificacion = '⚠️ FAIR'      THEN 1 ELSE 0 END) AS n_fair,
+                    SUM(CASE WHEN calificacion = '🛑 POOR'      THEN 1 ELSE 0 END) AS n_poor,
+                    COUNT(*) AS total
+                FROM scorecards
+                WHERE {where_parts}
+                GROUP BY centro, semana
+            """
+            return pd.read_sql_query(q, conn, params=params)
+
+        df_current = fetch_aggregates(pairs_latest)
+        df_prev    = fetch_aggregates(pairs_prev)
+
+        # ── Combinar current + prev para calcular delta de score ──────────────
+        if not df_prev.empty:
+            df_prev_score = df_prev[['centro', 'score_medio']].rename(
+                columns={'score_medio': 'score_prev'}
             )
-            if df_c.empty:
-                continue
+            df_current = df_current.merge(df_prev_score, on='centro', how='left')
+        else:
+            df_current['score_prev'] = None
 
-            # Semana anterior del mismo centro
-            df_prev_meta = pd.read_sql_query(
-                f"""SELECT semana, MAX(timestamp) as t FROM scorecards
-                    WHERE centro = {p} AND semana != {p}
-                    GROUP BY semana ORDER BY t DESC LIMIT 1""",
-                conn, params=(row['centro'], row['semana'])
-            )
-            prev_score = None
-            if not df_prev_meta.empty:
-                df_prev = pd.read_sql_query(
-                    f"SELECT score FROM scorecards WHERE centro = {p} AND semana = {p}",
-                    conn, params=(row['centro'], df_prev_meta['semana'].iloc[0])
-                )
-                if not df_prev.empty:
-                    prev_score = df_prev['score'].mean()
+        # Añadir pct_top2 y redondear score_prev
+        df_current['pct_top2'] = (
+            (df_current['n_fantastic'] + df_current['n_great'])
+            / df_current['total'].replace(0, float('nan'))
+            * 100
+        ).round(1).fillna(0)
 
-            total = len(df_c)
-            results.append({
-                'centro':        row['centro'],
-                'semana':        row['semana'],
-                'score_medio':   round(df_c['score'].mean(), 1),
-                'score_prev':    round(prev_score, 1) if prev_score is not None else None,
-                'dnr_medio':     round(df_c['dnr'].mean(), 2),
-                'dcr_medio':     round(df_c['dcr'].mean() * 100, 2),
-                'pod_medio':     round(df_c['pod'].mean() * 100, 2),
-                'n_fantastic':   int((df_c['calificacion'] == '💎 FANTASTIC').sum()),
-                'n_great':       int((df_c['calificacion'] == '🥇 GREAT').sum()),
-                'n_fair':        int((df_c['calificacion'] == '⚠️ FAIR').sum()),
-                'n_poor':        int((df_c['calificacion'] == '🛑 POOR').sum()),
-                'total':         total,
-                'pct_top2':      round((df_c['calificacion'].isin(['💎 FANTASTIC','🥇 GREAT'])).sum() / total * 100, 1) if total else 0,
-            })
-        conn.close()
-        return pd.DataFrame(results).sort_values('score_medio', ascending=False)
+        df_current['score_prev'] = df_current['score_prev'].apply(
+            lambda x: round(x, 1) if x is not None and not pd.isna(x) else None
+        )
+
+        return df_current.sort_values('score_medio', ascending=False).reset_index(drop=True)
+
     except Exception as e:
         _log.warning(f"cached_executive_summary error: {e}")
         return pd.DataFrame()
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def db_config_key(db_config: dict) -> str:
@@ -367,14 +557,19 @@ def update_user_password(username: str, new_hash: str, db_config: dict) -> bool:
 
 
 def get_user_role(username: str, db_config: dict) -> str | None:
-    """Devuelve el rol de un usuario o None si no existe."""
+    """
+    Devuelve el rol de un usuario activo o None si no existe / está desactivado.
+    Filtrar por active = 1 es consistente con get_user_data() y get_user_password_hash().
+    Sin este filtro, un usuario desactivado podría seguir siendo reconocido como superadmin
+    en las comprobaciones de permisos aunque no pueda hacer login.
+    """
     try:
         conn = scorecard.get_db_connection(db_config)
         cursor = conn.cursor()
-        q = ("SELECT role FROM users WHERE username = %s"
+        q = ("SELECT role FROM users WHERE LOWER(username) = %s AND active = 1"
              if db_config['type'] == 'postgresql' else
-             "SELECT role FROM users WHERE username = ?")
-        cursor.execute(q, (username,))
+             "SELECT role FROM users WHERE LOWER(username) = ? AND active = 1")
+        cursor.execute(q, (username.strip().lower(),))
         row = cursor.fetchone()
         conn.close()
         return row[0] if row else None
@@ -530,9 +725,11 @@ def check_login() -> bool:
                             st.rerun()
                         else:
                             _register_failed_attempt(uname)
-                            attempts_entry = _LOGIN_ATTEMPTS.get(uname, {})
-                            remaining_tries = MAX_LOGIN_ATTEMPTS - attempts_entry.get("count", 0)
-                            _audit(f"Login fallido para '{uname}' (intentos restantes: {max(0, remaining_tries)})")
+                            # Leer el contador actualizado desde la BD (fuente de verdad)
+                            row = _rate_limit_row(uname)
+                            current_count  = row["count"] if row else 1
+                            remaining_tries = max(0, MAX_LOGIN_ATTEMPTS - current_count)
+                            _audit(f"Login fallido para '{uname}' (intentos restantes: {remaining_tries})")
 
                             if remaining_tries <= 0:
                                 st.error(
@@ -601,24 +798,13 @@ with st.sidebar:
     with st.expander("📊 Estado del Sistema", expanded=False):
         bd_label = "🌐 Supabase" if db_config['type'] == 'postgresql' else "💾 SQLite"
         st.caption(bd_label)
-        try:
-            conn = scorecard.get_db_connection(db_config)
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM scorecards")
-            n_rec = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(DISTINCT semana) FROM scorecards")
-            n_weeks = cursor.fetchone()[0]
-            cursor.execute(
-                "SELECT semana, MAX(timestamp) as t FROM scorecards "
-                "GROUP BY semana ORDER BY t DESC LIMIT 1"
-            )
-            latest = cursor.fetchone()
-            conn.close()
-            st.metric("Registros totales", f"{n_rec:,}")
-            st.metric("Semanas en BD", n_weeks)
-            if latest:
-                st.success(f"Semana activa: **{latest[0]}**")
-        except Exception:
+        status = cached_db_status(_DB_KEY, db_config)
+        if status["ok"]:
+            st.metric("Registros totales", f"{status['n_rec']:,}")
+            st.metric("Semanas en BD", status["n_weeks"])
+            if status["semana"]:
+                st.success(f"Semana activa: **{status['semana']}**")
+        else:
             st.warning("BD no disponible")
 
     if is_jt and ALLOWED_WEEKS_JT:
@@ -949,12 +1135,7 @@ if tab_proc:
                                     )
                                     # Invalidar solo el caché relacionado con este lote
                                     # (no borramos todo para no perjudicar a usuarios concurrentes)
-                                    cached_scorecard.clear()
-                                    cached_available_batches.clear()
-                                    cached_allowed_weeks_jt.clear()
-                                    cached_executive_summary.clear()
-                                    cached_driver_trend.clear()
-                                    cached_meta.clear()
+                                    _clear_all_caches()
                                     _audit(f"Procesó {current_center} {current_week} — {len(df)} conductores")
 
                                     if ok:
@@ -1066,12 +1247,7 @@ if tab_dsp:
                                     parsed['wh'], semana, centro, db_config,
                                     user_data_session['name']
                                 )
-                                cached_scorecard.clear()
-                                cached_available_batches.clear()
-                                cached_allowed_weeks_jt.clear()
-                                cached_executive_summary.clear()
-                                cached_driver_trend.clear()
-                                cached_meta.clear()
+                                _clear_all_caches()
                                 _audit(f"Guardó PDF DSP {centro} {semana}")
                                 if ok_station:
                                     st.success(
@@ -1148,10 +1324,13 @@ with tab_excel:
             sc_week   = st.session_state.get('sc_week',   selected_week)
             sc_center = st.session_state.get('sc_center', selected_center)
 
-            # Si cambia selector, refrescar
+            # Si el selector cambió respecto al session_state, sincronizar inmediatamente.
+            # Sin esto, el scorecard visible y el selector mostrado quedaban desincronizados.
             if sc_week != selected_week or sc_center != selected_center:
                 sc_week   = selected_week
                 sc_center = selected_center
+                st.session_state['sc_week']   = selected_week
+                st.session_state['sc_center'] = selected_center
 
             df_sc = cached_scorecard(_DB_KEY, db_config, sc_week, sc_center)
 
@@ -1159,22 +1338,30 @@ with tab_excel:
                 st.warning("No se encontraron datos para este scorecard.")
             else:
                 # ── Buscar semana anterior para deltas WoW ────────────────
-                # La "semana anterior" es la segunda más reciente en BD para este centro
+                # Ordenamos por MAX(timestamp) DESC, no por nombre de semana.
+                # Esto evita el bug con comparación lexicográfica "W9" > "W10".
+                # La semana anterior = la segunda semana más reciente en BD para este centro.
+                conn_w = None
                 try:
                     conn_w = scorecard.get_db_connection(db_config)
                     p = "%s" if db_config['type'] == 'postgresql' else "?"
                     df_prev_meta = pd.read_sql_query(
-                        f"SELECT semana, MAX(timestamp) as t FROM scorecards "
-                        f"WHERE centro = {p} AND semana < {p} "
-                        f"GROUP BY semana ORDER BY semana DESC LIMIT 1",
+                        f"SELECT semana, MAX(timestamp) AS t FROM scorecards "
+                        f"WHERE centro = {p} AND semana != {p} "
+                        f"GROUP BY semana ORDER BY t DESC LIMIT 1",
                         conn_w, params=(sc_center, sc_week)
                     )
-                    conn_w.close()
                     prev_week = df_prev_meta['semana'].iloc[0] if not df_prev_meta.empty else None
                     df_prev = cached_scorecard(_DB_KEY, db_config, prev_week, sc_center) if prev_week else pd.DataFrame()
                 except Exception:
                     prev_week = None
                     df_prev = pd.DataFrame()
+                finally:
+                    if conn_w is not None:
+                        try:
+                            conn_w.close()
+                        except Exception:
+                            pass
 
                 # ── KPIs resumen + delta WoW ──────────────────────────────
                 total   = len(df_sc)
@@ -1483,8 +1670,20 @@ with tab_excel:
 
                     df_trend = cached_driver_trend(_DB_KEY, db_config, sel_driver_id, sc_center)
 
-                    if df_trend.empty or len(df_trend) < 1:
-                        st.info("ℹ️ Este conductor solo tiene datos de la semana actual. Necesitas al menos 2 semanas para ver tendencia.")
+                    if df_trend.empty:
+                        st.info("ℹ️ No se encontraron datos históricos para este conductor.")
+                    elif len(df_trend) < 2:
+                        # 1 semana: mostramos los datos pero no hay tendencia que dibujar
+                        st.info(
+                            f"ℹ️ **{sel_driver_name}** solo tiene datos de 1 semana "
+                            f"({df_trend['semana'].iloc[0]}). "
+                            "Necesitas al menos 2 semanas para ver la tendencia."
+                        )
+                        st.metric(
+                            "Score actual",
+                            int(df_trend['score'].iloc[0]),
+                            help="Score de la única semana disponible"
+                        )
                     else:
                         # ── Header del conductor ──────────────────────────────
                         latest = df_trend.iloc[-1]
@@ -1822,7 +2021,9 @@ if tab_admin:
                                     conn_c.close()
                                     if total_sa <= 1:
                                         st.error("🛑 No se puede eliminar al único Superadmin del sistema")
-                                        st.stop()
+                                        # No usar st.stop() — detiene el render completo de la app.
+                                        # Salimos del bloque con la condición else encadenada abajo.
+                                        target_role = None  # Fuerza el path de error sin borrar
                                 if target_role in ['admin', 'superadmin'] and not is_superadmin:
                                     st.error("🛑 Solo el Superadmin puede eliminar administradores")
                                 elif target_role is None:
@@ -1957,12 +2158,7 @@ if tab_admin:
                 if st.form_submit_button("Limpiar"):
                     if clean_center and clean_week:
                         scorecard.delete_scorecard_batch(clean_week, clean_center, db_config=db_config)
-                        cached_scorecard.clear()
-                        cached_available_batches.clear()
-                        cached_allowed_weeks_jt.clear()
-                        cached_executive_summary.clear()
-                        cached_driver_trend.clear()
-                        cached_meta.clear()
+                        _clear_all_caches()
                         _audit(f"Eliminó lote {clean_center} {clean_week}")
                         st.success(f"✅ {clean_center} — {clean_week} eliminado")
                     else:
@@ -1976,7 +2172,7 @@ if tab_admin:
                 if st.button("BORRAR TODO", disabled=(confirm != "CONFIRMAR"),
                              type="primary", use_container_width=True):
                     if scorecard.reset_production_database(db_config):
-                        st.cache_data.clear()  # Borrado total correcto: se eliminó TODA la BD
+                        _clear_all_caches()  # Reset total: invalida toda la caché
                         _audit("⚠️ RESET TOTAL de base de datos")
                         st.success("✅ Base de datos limpiada")
                         st.rerun()
