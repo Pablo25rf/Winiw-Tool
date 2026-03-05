@@ -1,9 +1,9 @@
 """
-Winiw Quality Scorecard — app.py v3.5
+Winiw Quality Scorecard — app.py v3.9
 ======================================
 v3.3: Dashboard rediseñado, caché, JT restrictions, DSP PDF parser, WoW deltas
 v3.4: SQL injection fix, hardcoding eliminado, caché selectivo, audit log, validaciones
-v3.5 (este archivo):
+v3.7 (este archivo):
   - 🔒 SEGURIDAD: Rate limiting en login — 5 intentos fallidos → bloqueo 15 min
   - 🏢 NUEVO TAB: Dashboard Ejecutivo — todos los centros en una pantalla, ranking, WoW
   - 📈 TENDENCIA: Gráfico de evolución del score por conductor (últimas 8 semanas)
@@ -14,32 +14,32 @@ v3.5 (este archivo):
   - 📊 CÓDIGO: SEMANAS_VISIBLES_JT y TREND_SEMANAS_MAX como constantes configurables
 """
 
+import streamlit as st
+import pandas as pd
+import zipfile
+import tempfile
+import pathlib
+import amazon_scorecard_ultra_robust_v3_FINAL as scorecard
 import io
 import re
 import os
 import logging
+import html as _html
+import altair as alt
 from datetime import datetime, timedelta
-
-# ─────────────────────────────────────────────────────────────────────────────
-# LOGGING — Configuración CENTRALIZADA antes de cualquier import interno.
-# scorecard.py solo llama a logging.getLogger(__name__) sin basicConfig propio.
-# ─────────────────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("logs/winiw_app.log", mode='a', encoding='utf-8')
-        if os.path.isdir("logs") else logging.StreamHandler()
-    ]
-)
-
-import streamlit as st
-import pandas as pd
-import amazon_scorecard_ultra_robust_v3_FINAL as scorecard  # noqa: E402 (import after logging setup)
 
 # Logger de auditoría de la app (separado del motor)
 _log = logging.getLogger("winiw_app")
+if not _log.handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler("logs/winiw_app.log", mode='a', encoding='utf-8')
+            if os.path.isdir("logs") else logging.StreamHandler()
+        ]
+    )
 
 def _audit(msg: str):
     """Log de auditoría: registra quién hizo qué y cuándo."""
@@ -47,121 +47,12 @@ def _audit(msg: str):
     _log.info(f"[{user}] {msg}")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# RATE LIMITING — persistido en la tabla login_attempts de la BD
+# RATE LIMITING (persistente vía BD — funciona en multi-worker y tras reinicios)
 # ─────────────────────────────────────────────────────────────────────────────
-# El dict en memoria anterior (_LOGIN_ATTEMPTS) se perdía al reiniciar el servidor
-# y era invisible entre workers distintos del mismo proceso Streamlit.
-# La tabla login_attempts garantiza que el bloqueo es global y durable.
-# ─────────────────────────────────────────────────────────────────────────────
+# Se delega completamente al motor (scorecard.py) que usa la tabla login_attempts.
+# Estas constantes se pasan como parámetros a las funciones del motor.
 MAX_LOGIN_ATTEMPTS    = 5        # intentos fallidos antes del bloqueo
 LOGIN_LOCKOUT_MINUTES = 15       # minutos de bloqueo tras agotar intentos
-
-
-def _rate_limit_row(uname: str) -> dict | None:
-    """Lee la fila de login_attempts para un username. None si no existe."""
-    try:
-        conn   = scorecard.get_db_connection(db_config)
-        cursor = conn.cursor()
-        ph     = "%s" if db_config['type'] == 'postgresql' else "?"
-        cursor.execute(
-            f"SELECT fail_count, locked_until FROM login_attempts WHERE username = {ph}",
-            (uname.lower(),)
-        )
-        row = cursor.fetchone()
-        conn.close()
-        if row is None:
-            return None
-        return {"count": row[0], "locked_until": row[1]}
-    except Exception as e:
-        _log.warning(f"_rate_limit_row error: {e}")
-        return None
-
-
-def _is_locked(uname: str) -> tuple[bool, int]:
-    """Devuelve (bloqueado, segundos_restantes)."""
-    row = _rate_limit_row(uname)
-    if not row or not row["locked_until"]:
-        return False, 0
-    lu = row["locked_until"]
-    # SQLite devuelve string; PostgreSQL devuelve datetime
-    if isinstance(lu, str):
-        try:
-            lu = datetime.fromisoformat(lu)
-        except ValueError:
-            return False, 0
-    if datetime.now() < lu:
-        return True, int((lu - datetime.now()).total_seconds())
-    return False, 0
-
-
-def _register_failed_attempt(uname: str):
-    """Registra un intento fallido y bloquea si se superan MAX_LOGIN_ATTEMPTS."""
-    try:
-        conn   = scorecard.get_db_connection(db_config)
-        cursor = conn.cursor()
-        is_pg  = db_config['type'] == 'postgresql'
-        ph     = "%s" if is_pg else "?"
-        now    = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        # UPSERT: crear o incrementar el contador
-        if is_pg:
-            cursor.execute(
-                """INSERT INTO login_attempts (username, fail_count, last_attempt)
-                   VALUES (%s, 1, %s)
-                   ON CONFLICT (username) DO UPDATE
-                   SET fail_count    = login_attempts.fail_count + 1,
-                       last_attempt  = EXCLUDED.last_attempt""",
-                (uname.lower(), now)
-            )
-        else:
-            cursor.execute(
-                """INSERT INTO login_attempts (username, fail_count, last_attempt)
-                   VALUES (?, 1, ?)
-                   ON CONFLICT(username) DO UPDATE
-                   SET fail_count   = login_attempts.fail_count + 1,
-                       last_attempt = excluded.last_attempt""",
-                (uname.lower(), now)
-            )
-        conn.commit()
-
-        # Leer el contador actualizado para decidir si bloquear
-        cursor.execute(
-            f"SELECT fail_count FROM login_attempts WHERE username = {ph}",
-            (uname.lower(),)
-        )
-        row = cursor.fetchone()
-        if row and row[0] >= MAX_LOGIN_ATTEMPTS:
-            locked_until = (
-                datetime.now() + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
-            ).strftime("%Y-%m-%d %H:%M:%S")
-            cursor.execute(
-                f"UPDATE login_attempts SET locked_until = {ph} WHERE username = {ph}",
-                (locked_until, uname.lower())
-            )
-            conn.commit()
-            _log.warning(
-                f"[RATE LIMIT] '{uname}' bloqueado {LOGIN_LOCKOUT_MINUTES} min "
-                f"tras {row[0]} intentos fallidos"
-            )
-        conn.close()
-    except Exception as e:
-        _log.warning(f"_register_failed_attempt error: {e}")
-
-
-def _clear_attempts(uname: str):
-    """Limpia el contador tras login exitoso."""
-    try:
-        conn   = scorecard.get_db_connection(db_config)
-        cursor = conn.cursor()
-        ph     = "%s" if db_config['type'] == 'postgresql' else "?"
-        cursor.execute(
-            f"DELETE FROM login_attempts WHERE username = {ph}",
-            (uname.lower(),)
-        )
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        _log.warning(f"_clear_attempts error: {e}")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIG INICIAL
@@ -173,10 +64,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-SESSION_TIMEOUT_MINUTES = 60   # Cierre de sesión automático por inactividad
-HISTORICO_MAX_ROWS     = 5000  # Máximo de filas en la vista histórico (ajustable)
-SEMANAS_VISIBLES_JT    = 2     # Cuántas semanas recientes puede ver un JT
-TREND_SEMANAS_MAX      = 8     # Semanas de historia en el gráfico de tendencia
+SESSION_TIMEOUT_MINUTES = 60
+HISTORICO_MAX_ROWS     = 2000  # Reducido para rendimiento
+SEMANAS_VISIBLES_JT    = 2
+TREND_SEMANAS_MAX      = 8
+TREND_WEEKS_BATCH      = 4    # Semanas cargadas en batch para trend conductores
+SEMANAS_RECIENTES      = 5    # Semanas recientes en selector de semana activa
+MAX_SEMANAS_ACTIVAS    = 4     # Semanas activas en vistas principales (BD guarda todo)
+DRIVERS_PER_PAGE       = 20   # Conductores por página en tab Scorecard
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS
@@ -218,66 +113,41 @@ def clean_html(html: str) -> str:
 
 # ── Caché de datos (TTL 5 min para no saturar Supabase) ──────────────────────
 
-def _clear_all_caches():
-    """
-    Invalida toda la caché de datos de la sesión.
-    Llamar tras cualquier operación que modifique la BD (subida, borrado, targets).
-    Centralizado aquí para no tener que recordar cada función cacheada en cada sitio.
-    """
-    st.cache_data.clear()
-
-@st.cache_data(ttl=60, show_spinner=False)
-def cached_db_status(_db_config_key: str, db_config: dict) -> dict:
-    """
-    Estado del sistema para el sidebar: total de registros, semanas y semana activa.
-    TTL de 60 s — se refresca cada minuto sin ejecutar 3 queries en cada re-render
-    (el sidebar se re-renderiza con cada interacción del usuario).
-    """
-    try:
-        conn   = scorecard.get_db_connection(db_config)
-        cursor = conn.cursor()
-        cursor.execute(
-            """SELECT COUNT(*) AS n_rec,
-                      COUNT(DISTINCT semana) AS n_weeks
-               FROM scorecards"""
-        )
-        row = cursor.fetchone()
-        # Semana activa = la subida más recientemente
-        cursor.execute(
-            "SELECT semana, MAX(timestamp) AS t "
-            "FROM scorecards GROUP BY semana ORDER BY t DESC LIMIT 1"
-        )
-        latest = cursor.fetchone()
-        conn.close()
-        return {
-            "ok":       True,
-            "n_rec":    row[0] if row else 0,
-            "n_weeks":  row[1] if row else 0,
-            "semana":   latest[0] if latest else None,
-        }
-    except Exception as e:
-        _log.warning(f"cached_db_status error: {e}")
-        return {"ok": False, "n_rec": 0, "n_weeks": 0, "semana": None}
-
-
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_allowed_weeks_jt(_db_config_key: str, db_config: dict) -> list:
+    """Las 2 semanas que puede ver un JT — por timestamp de subida, no por nombre."""
+    try:
+        with scorecard.db_connection(db_config) as conn:
+            df = pd.read_sql_query(
+                "SELECT semana, MAX(timestamp) as last_upload "
+                "FROM scorecards GROUP BY semana ORDER BY last_upload DESC"
+                f" LIMIT {SEMANAS_VISIBLES_JT}",
+                conn
+            )
+        return df['semana'].tolist()
+    except Exception as _e:
+        _log.warning(f"cached_allowed_weeks_jt: {_e}")
+        return []
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_active_weeks(_db_config_key: str, db_config: dict, limit: int = MAX_SEMANAS_ACTIVAS) -> list:
     """
-    Las 2 semanas que puede ver un JT = las 2 más recientemente subidas (por timestamp).
-    NO es un ORDER BY semana — es por cuándo se subieron los archivos.
-    Supabase sigue almacenando TODO; esto es solo filtro de visualización.
+    Devuelve las últimas `limit` semanas por timestamp de subida.
+    Usado para filtrar las vistas principales (Scorecard, Dashboard).
+    La BD sigue guardando TODO — esto es solo un filtro de visualización.
     """
     try:
-        conn = scorecard.get_db_connection(db_config)
-        df = pd.read_sql_query(
-            "SELECT semana, MAX(timestamp) as last_upload "
-            "FROM scorecards GROUP BY semana ORDER BY last_upload DESC"
-            f" LIMIT {SEMANAS_VISIBLES_JT}",
-            conn
-        )
-        conn.close()
+        with scorecard.db_connection(db_config) as conn:
+            df = pd.read_sql_query(
+                "SELECT semana, MAX(timestamp) as last_upload "
+                "FROM scorecards GROUP BY semana ORDER BY last_upload DESC"
+                f" LIMIT {limit}",
+                conn
+            )
         return df['semana'].tolist()
-    except Exception:
+    except Exception as _e:
+        _log.warning(f"get_active_weeks: {_e}")
         return []
 
 
@@ -285,42 +155,62 @@ def cached_allowed_weeks_jt(_db_config_key: str, db_config: dict) -> list:
 def cached_scorecard(_db_config_key: str, db_config: dict, semana: str, centro: str) -> pd.DataFrame:
     """Carga datos de un lote con caché de 5 min."""
     try:
-        conn = scorecard.get_db_connection(db_config)
-        p = "%s" if db_config['type'] == 'postgresql' else "?"
-        df = pd.read_sql_query(
-            f"SELECT * FROM scorecards WHERE semana = {p} AND centro = {p}",
-            conn, params=(semana, centro)
-        )
-        conn.close()
+        with scorecard.db_connection(db_config) as conn:
+            p = "%s" if db_config['type'] == 'postgresql' else "?"
+            df = pd.read_sql_query(
+                f"""SELECT id, semana, fecha_semana, centro, driver_id, driver_name,
+                           calificacion, score, entregados, dnr, fs_count,
+                           dnr_risk_events, dcr, pod, cc, fdps, rts, cdf,
+                           entregados_oficial, dcr_oficial, pod_oficial, cc_oficial,
+                           dsc_dpmo, lor_dpmo, ce_dpmo, cdf_dpmo_oficial, pdf_loaded,
+                           uploaded_by, timestamp
+                    FROM scorecards WHERE semana = {p} AND centro = {p}""",
+                conn, params=(semana, centro)
+            )
         return df
-    except Exception:
+    except Exception as _e:
+        _log.warning(f"cached_scorecard error: {_e}")
         return pd.DataFrame()
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def cached_available_batches(_db_config_key: str, db_config: dict, allowed_weeks: list = None) -> pd.DataFrame:
-    """Lista de lotes disponibles, filtrada por semanas permitidas si se especifica."""
+def cached_available_batches(_db_config_key: str, db_config: dict,
+                              allowed_weeks: list = None,
+                              active_weeks_only: list = None) -> pd.DataFrame:
+    """
+    Lista de lotes disponibles.
+    - allowed_weeks: filtro de JT (solo sus semanas permitidas)
+    - active_weeks_only: filtro de vistas principales (últimas 4 semanas)
+    - Si ninguno se pasa → devuelve TODO (para Histórico)
+    """
     try:
-        conn = scorecard.get_db_connection(db_config)
-        where = ""
-        params = None
-        if allowed_weeks:
+        with scorecard.db_connection(db_config) as conn:
+            where_parts = []
+            params = []
             p = "%s" if db_config['type'] == 'postgresql' else "?"
-            placeholders = ", ".join([p] * len(allowed_weeks))
-            where = f"WHERE semana IN ({placeholders})"
-            params = allowed_weeks
-        q = f"""
-            SELECT semana, centro,
-                   MAX(uploaded_by) as subido_por,
-                   MAX(timestamp) as fecha_subida
-            FROM scorecards {where}
-            GROUP BY semana, centro
-            ORDER BY fecha_subida DESC
-        """
-        df = pd.read_sql_query(q, conn, params=params)
-        conn.close()
+
+            if active_weeks_only:
+                phs = ", ".join([p] * len(active_weeks_only))
+                where_parts.append(f"semana IN ({phs})")
+                params += list(active_weeks_only)
+            if allowed_weeks:
+                phs = ", ".join([p] * len(allowed_weeks))
+                where_parts.append(f"semana IN ({phs})")
+                params += list(allowed_weeks)
+
+            where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+            q = f"""
+                SELECT semana, centro,
+                       MAX(uploaded_by) as subido_por,
+                       MAX(timestamp) as fecha_subida
+                FROM scorecards {where}
+                GROUP BY semana, centro
+                ORDER BY fecha_subida DESC
+            """
+            df = pd.read_sql_query(q, conn, params=params if params else None)
         return df
-    except Exception:
+    except Exception as _e:
+        _log.warning(f"cached_available_batches error: {_e}")
         return pd.DataFrame()
 
 
@@ -328,21 +218,21 @@ def cached_available_batches(_db_config_key: str, db_config: dict, allowed_weeks
 def cached_meta(_db_config_key: str, db_config: dict, allowed_weeks: list = None) -> pd.DataFrame:
     """Metadatos para filtros del histórico."""
     try:
-        conn = scorecard.get_db_connection(db_config)
-        where = ""
-        params = None
-        if allowed_weeks:
-            p = "%s" if db_config['type'] == 'postgresql' else "?"
-            placeholders = ", ".join([p] * len(allowed_weeks))
-            where = f"WHERE semana IN ({placeholders})"
-            params = allowed_weeks
-        df = pd.read_sql_query(
-            f"SELECT DISTINCT centro, semana, calificacion FROM scorecards {where} ORDER BY semana DESC",
-            conn, params=params
-        )
-        conn.close()
+        with scorecard.db_connection(db_config) as conn:
+            where = ""
+            params = None
+            if allowed_weeks:
+                p = "%s" if db_config['type'] == 'postgresql' else "?"
+                placeholders = ", ".join([p] * len(allowed_weeks))
+                where = f"WHERE semana IN ({placeholders})"
+                params = allowed_weeks
+            df = pd.read_sql_query(
+                f"SELECT DISTINCT centro, semana, calificacion FROM scorecards {where} ORDER BY fecha_semana DESC, semana DESC",
+                conn, params=params
+            )
         return df
-    except Exception:
+    except Exception as _e:
+        _log.warning(f"cached_meta error: {_e}")
         return pd.DataFrame()
 
 
@@ -353,169 +243,439 @@ def cached_driver_trend(_db_config_key: str, db_config: dict, driver_id: str, ce
     Devuelve columnas: semana, score, dnr, dcr, pod, cc, calificacion
     """
     try:
-        conn = scorecard.get_db_connection(db_config)
-        p = "%s" if db_config['type'] == 'postgresql' else "?"
-        df = pd.read_sql_query(
-            f"""SELECT semana, score, dnr, dcr, pod, cc, calificacion, detalles
-                FROM scorecards
-                WHERE driver_id = {p} AND centro = {p}
-                ORDER BY semana ASC""",
-            conn, params=(driver_id, centro)
-        )
-        conn.close()
+        with scorecard.db_connection(db_config) as conn:
+            p = "%s" if db_config['type'] == 'postgresql' else "?"
+            df = pd.read_sql_query(
+                f"""SELECT semana, score, dnr, dcr, pod, cc, calificacion, detalles
+                    FROM scorecards
+                    WHERE driver_id = {p} AND centro = {p}
+                    ORDER BY fecha_semana ASC, semana ASC""",
+                conn, params=(driver_id, centro)
+            )
         return df
-    except Exception:
+    except Exception as _e:
+        _log.warning(f"cached_driver_trend error: {_e}")
         return pd.DataFrame()
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_executive_summary(_db_config_key: str, db_config: dict) -> pd.DataFrame:
     """
-    Resumen ejecutivo: última semana disponible por centro + métricas agregadas.
-    Devuelve una fila por centro con: semana_actual, score_medio, dnr_medio, dcr_medio,
-    pod_medio, n_fantastic, n_great, n_fair, n_poor, total_drivers, score_prev.
+    Resumen ejecutivo — 2 queries en vez de N×3.
 
-    Implementación anterior: N+1 queries (1 inicial + 3 por centro).
-    Implementación actual:   2 queries totales independientemente del número de centros.
-      · Query 1 — trae la semana más reciente Y la anterior por centro en un solo paso
-                  usando una subquery de ranking por timestamp.
-      · Query 2 — agrega métricas filtrando por los pares (centro, semana) obtenidos.
+    Query 1: para cada centro, la semana más reciente + todas sus métricas agregadas.
+    Query 2: semana anterior por centro para calcular delta WoW.
     """
-    conn = None
     try:
-        conn = scorecard.get_db_connection(db_config)
-        is_pg = db_config['type'] == 'postgresql'
+        with scorecard.db_connection(db_config) as conn:
+            is_pg = db_config['type'] == 'postgresql'
 
-        # ── Query 1: identificar semana actual y anterior por centro ──────────
-        # Asigna rn=1 a la semana más reciente (por MAX timestamp) y rn=2 a la anterior.
-        if is_pg:
-            q_ranks = """
-                SELECT centro, semana, rn
-                FROM (
+            # ── Query 1: última semana por centro + agregados ──────────────
+            # Usamos MAX(timestamp) para determinar qué semana es la "actual"
+            # (no MAX(semana) — el usuario puede re-subir semanas pasadas)
+            sql_current = """
+                WITH ranked AS (
                     SELECT centro, semana,
+                           MAX(timestamp) AS last_ts,
                            ROW_NUMBER() OVER (
-                               PARTITION BY centro
-                               ORDER BY MAX(timestamp) DESC
+                               PARTITION BY centro ORDER BY MAX(timestamp) DESC
                            ) AS rn
                     FROM scorecards
                     GROUP BY centro, semana
-                ) ranked
-                WHERE rn <= 2
-            """
-        else:
-            # SQLite < 3.25 no tiene window functions; emulamos con subquery de ranking
-            q_ranks = """
+                ),
+                latest AS (SELECT centro, semana FROM ranked WHERE rn = 1)
                 SELECT s.centro, s.semana,
-                       (SELECT COUNT(DISTINCT semana2)
-                        FROM (
-                            SELECT semana AS semana2, MAX(timestamp) AS t2
-                            FROM scorecards WHERE centro = s.centro GROUP BY semana
-                        ) x WHERE x.t2 >= s.max_t
-                       ) AS rn
-                FROM (
-                    SELECT centro, semana, MAX(timestamp) AS max_t
-                    FROM scorecards GROUP BY centro, semana
-                ) s
-                WHERE rn <= 2
+                       AVG(s.score)           AS score_medio,
+                       AVG(s.dnr)             AS dnr_medio,
+                       AVG(s.dcr)  * 100      AS dcr_medio,
+                       AVG(s.pod)  * 100      AS pod_medio,
+                       SUM(CASE WHEN s.calificacion = '💎 FANTASTIC' THEN 1 ELSE 0 END) AS n_fantastic,
+                       SUM(CASE WHEN s.calificacion = '🥇 GREAT'     THEN 1 ELSE 0 END) AS n_great,
+                       SUM(CASE WHEN s.calificacion = '⚠️ FAIR'      THEN 1 ELSE 0 END) AS n_fair,
+                       SUM(CASE WHEN s.calificacion = '🛑 POOR'      THEN 1 ELSE 0 END) AS n_poor,
+                       COUNT(*) AS total
+                FROM scorecards s
+                JOIN latest l ON s.centro = l.centro AND s.semana = l.semana
+                GROUP BY s.centro, s.semana
             """
+            df_cur = pd.read_sql_query(sql_current, conn)
+            if df_cur.empty:
+                return pd.DataFrame()
 
-        df_ranks = pd.read_sql_query(q_ranks, conn)
-        if df_ranks.empty:
-            return pd.DataFrame()
-
-        latest_rows  = df_ranks[df_ranks['rn'] == 1]
-        prev_rows    = df_ranks[df_ranks['rn'] == 2]
-
-        # ── Query 2: agregar métricas para semanas actuales ───────────────────
-        # Construimos los pares (centro, semana) como filtro
-        if latest_rows.empty:
-            return pd.DataFrame()
-
-        ph = '%s' if is_pg else '?'
-        pairs_latest = list(zip(latest_rows['centro'], latest_rows['semana']))
-        pairs_prev   = list(zip(prev_rows['centro'],   prev_rows['semana']))
-
-        def fetch_aggregates(pairs: list) -> pd.DataFrame:
-            """Trae métricas agregadas para una lista de pares (centro, semana)."""
-            if not pairs:
-                return pd.DataFrame(columns=['centro', 'semana', 'score_medio',
-                                             'dnr_medio', 'dcr_medio', 'pod_medio',
-                                             'n_fantastic', 'n_great', 'n_fair',
-                                             'n_poor', 'total'])
-            # Construir WHERE con OR para cada par — evita un JOIN complejo
-            where_parts = " OR ".join([f"(centro = {ph} AND semana = {ph})"] * len(pairs))
-            params = [v for pair in pairs for v in pair]
-            q = f"""
-                SELECT
-                    centro,
-                    semana,
-                    ROUND(AVG(score), 1)        AS score_medio,
-                    ROUND(AVG(dnr), 2)           AS dnr_medio,
-                    ROUND(AVG(dcr) * 100, 2)     AS dcr_medio,
-                    ROUND(AVG(pod) * 100, 2)     AS pod_medio,
-                    SUM(CASE WHEN calificacion = '💎 FANTASTIC' THEN 1 ELSE 0 END) AS n_fantastic,
-                    SUM(CASE WHEN calificacion = '🥇 GREAT'     THEN 1 ELSE 0 END) AS n_great,
-                    SUM(CASE WHEN calificacion = '⚠️ FAIR'      THEN 1 ELSE 0 END) AS n_fair,
-                    SUM(CASE WHEN calificacion = '🛑 POOR'      THEN 1 ELSE 0 END) AS n_poor,
-                    COUNT(*) AS total
-                FROM scorecards
-                WHERE {where_parts}
-                GROUP BY centro, semana
+            # ── Query 2: semana anterior por centro para delta WoW ─────────
+            sql_prev = """
+                WITH ranked AS (
+                    SELECT centro, semana,
+                           MAX(timestamp) AS last_ts,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY centro ORDER BY MAX(timestamp) DESC
+                           ) AS rn
+                    FROM scorecards
+                    GROUP BY centro, semana
+                ),
+                second AS (SELECT centro, semana FROM ranked WHERE rn = 2)
+                SELECT s.centro, AVG(s.score) AS score_prev
+                FROM scorecards s
+                JOIN second p ON s.centro = p.centro AND s.semana = p.semana
+                GROUP BY s.centro
             """
-            return pd.read_sql_query(q, conn, params=params)
+            # Window functions: PostgreSQL soporta nativamente.
+            # SQLite >= 3.25 también. Si falla, caemos a prev_score = None.
+            try:
+                df_prev = pd.read_sql_query(sql_prev, conn)
+            except Exception:
+                df_prev = pd.DataFrame(columns=['centro', 'score_prev'])
 
-        df_current = fetch_aggregates(pairs_latest)
-        df_prev    = fetch_aggregates(pairs_prev)
+        # ── Merge y cálculo de columnas derivadas ─────────────────────────
+        df = df_cur.merge(df_prev, on='centro', how='left')
 
-        # ── Combinar current + prev para calcular delta de score ──────────────
-        if not df_prev.empty:
-            df_prev_score = df_prev[['centro', 'score_medio']].rename(
-                columns={'score_medio': 'score_prev'}
-            )
-            df_current = df_current.merge(df_prev_score, on='centro', how='left')
-        else:
-            df_current['score_prev'] = None
+        df['score_medio']  = df['score_medio'].round(1)
+        df['score_prev']   = df['score_prev'].round(1) if 'score_prev' in df.columns else None
+        df['dnr_medio']    = df['dnr_medio'].round(2)
+        df['dcr_medio']    = df['dcr_medio'].round(2)
+        df['pod_medio']    = df['pod_medio'].round(2)
+        df['n_fantastic']  = df['n_fantastic'].astype(int)
+        df['n_great']      = df['n_great'].astype(int)
+        df['n_fair']       = df['n_fair'].astype(int)
+        df['n_poor']       = df['n_poor'].astype(int)
+        df['total']        = df['total'].astype(int)
+        df['pct_top2']     = ((df['n_fantastic'] + df['n_great']) / df['total'] * 100).round(1)
 
-        # Añadir pct_top2 y redondear score_prev
-        df_current['pct_top2'] = (
-            (df_current['n_fantastic'] + df_current['n_great'])
-            / df_current['total'].replace(0, float('nan'))
-            * 100
-        ).round(1).fillna(0)
-
-        df_current['score_prev'] = df_current['score_prev'].apply(
-            lambda x: round(x, 1) if x is not None and not pd.isna(x) else None
-        )
-
-        return df_current.sort_values('score_medio', ascending=False).reset_index(drop=True)
+        return df.sort_values('score_medio', ascending=False).reset_index(drop=True)
 
     except Exception as e:
         _log.warning(f"cached_executive_summary error: {e}")
         return pd.DataFrame()
-    finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
 
+
+@st.cache_data(ttl=600, show_spinner=False)
+def cached_center_targets(_db_config_key: str, db_config: dict, centro: str) -> dict:
+    """Targets de un centro — caché 10 min (cambian muy poco)."""
+    return scorecard.get_center_targets(centro, db_config=db_config)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_centro_tendencia(_db_config_key: str, db_config: dict, centro: str) -> pd.DataFrame:
+    """
+    Evolución semanal de un centro: % por calificación, score medio, dnr medio.
+    Devuelve una fila por semana ordenada cronológicamente.
+    """
+    try:
+        with scorecard.db_connection(db_config) as conn:
+            ph = "%s" if db_config['type'] == 'postgresql' else "?"
+            df = pd.read_sql_query(
+                f"""SELECT semana,
+                       AVG(score)  AS score_medio,
+                       AVG(dnr)    AS dnr_medio,
+                       AVG(dcr)*100 AS dcr_medio,
+                       AVG(pod)*100 AS pod_medio,
+                       COUNT(*)    AS total,
+                       SUM(CASE WHEN calificacion='💎 FANTASTIC' THEN 1 ELSE 0 END) AS n_fantastic,
+                       SUM(CASE WHEN calificacion='🥇 GREAT'     THEN 1 ELSE 0 END) AS n_great,
+                       SUM(CASE WHEN calificacion='⚠️ FAIR'      THEN 1 ELSE 0 END) AS n_fair,
+                       SUM(CASE WHEN calificacion='🛑 POOR'      THEN 1 ELSE 0 END) AS n_poor
+                   FROM scorecards WHERE centro = {ph}
+                   GROUP BY semana ORDER BY fecha_semana ASC, semana ASC""",
+                conn, params=(centro,)
+            )
+        if df.empty:
+            return df
+        total_col = df['total'].replace(0, 1)  # evitar /0
+        df['pct_fantastic'] = (df['n_fantastic'] / total_col * 100).round(1)
+        df['pct_great']     = (df['n_great']     / total_col * 100).round(1)
+        df['pct_fair']      = (df['n_fair']       / total_col * 100).round(1)
+        df['pct_poor']      = (df['n_poor']       / total_col * 100).round(1)
+        return df
+    except Exception as e:
+        _log.warning(f"cached_centro_tendencia error: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_sidebar_stats(_db_config_key: str, db_config: dict):
+    """Stats rapidas del sidebar, cache 60s."""
+    try:
+        with scorecard.db_connection(db_config) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM scorecards")
+            n_rec = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(DISTINCT semana) FROM scorecards")
+            n_weeks = cursor.fetchone()[0]
+            cursor.execute(
+                "SELECT semana, MAX(timestamp) as t FROM scorecards "
+                "GROUP BY semana ORDER BY t DESC LIMIT 1"
+            )
+            latest = cursor.fetchone()
+        return n_rec, n_weeks, latest
+    except Exception:
+        return 0, 0, None
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def cached_user_centro(_db_config_key: str, db_config: dict, username: str) -> str | None:
+    """Centro asignado a un JT. None = sin restricción."""
+    return scorecard.get_user_centro(username, db_config)
+
+
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_prev_week(_db_config_key: str, db_config: dict, centro: str, semana: str) -> pd.DataFrame:
+    """
+    Scorecard de la semana anterior a `semana` para un centro — caché 5 min.
+    Evita una query raw sin caché en cada re-render del tab Scorecard.
+    """
+    try:
+        p = "%s" if db_config['type'] == 'postgresql' else "?"
+        with scorecard.db_connection(db_config) as conn:
+            df_meta = pd.read_sql_query(
+                f"SELECT semana FROM scorecards "
+                f"WHERE centro = {p} "
+                f"AND fecha_semana < (SELECT MIN(fecha_semana) FROM scorecards "
+                f"                    WHERE centro = {p} AND semana = {p}) "
+                f"GROUP BY semana ORDER BY fecha_semana DESC LIMIT 1",
+                conn, params=(centro, centro, semana)
+            )
+        if df_meta.empty:
+            return pd.DataFrame()
+        prev_week = df_meta['semana'].iloc[0]
+        return cached_scorecard(_db_config_key, db_config, prev_week, centro)
+    except Exception as _e:
+        _log.warning(f"cached_prev_week error: {_e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_trend_batch(_db_config_key: str, db_config: dict, centro: str,
+                       n_weeks: int = 4) -> pd.DataFrame:
+    """
+    Pre-carga las últimas `n_weeks` semanas de tendencia para todos los
+    conductores de un centro — caché 5 min.
+    Evita 2 queries raw en cada re-render del tab Scorecard.
+    """
+    try:
+        p = "%s" if db_config['type'] == 'postgresql' else "?"
+        with scorecard.db_connection(db_config) as conn:
+            df_semanas = pd.read_sql_query(
+                f"SELECT DISTINCT semana FROM scorecards WHERE centro = {p} "
+                f"ORDER BY fecha_semana DESC, semana DESC LIMIT {n_weeks}",
+                conn, params=(centro,)
+            )
+            if df_semanas.empty:
+                return pd.DataFrame()
+            semanas = df_semanas['semana'].tolist()
+            ph_list = ', '.join([p] * len(semanas))
+            return pd.read_sql_query(
+                f"SELECT driver_id, semana, score, calificacion "
+                f"FROM scorecards WHERE centro = {p} "
+                f"AND semana IN ({ph_list}) "
+                f"ORDER BY fecha_semana ASC, semana ASC",
+                conn, params=([centro] + semanas)
+            )
+    except Exception as _e:
+        _log.warning(f"cached_trend_batch error: {_e}")
+        return pd.DataFrame()
 
 def db_config_key(db_config: dict) -> str:
     """Clave estable para usar en el caché (evita pasar dicts como arg de caché)."""
     return f"{db_config.get('type')}:{db_config.get('host','local')}:{db_config.get('database','')}"
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPER: limpiar todas las cachés en un único lugar
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPERS DE DISPLAY — nivel módulo (antes redefinidas en cada render)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _score_color(s) -> str:
+    """Color hex según score."""
+    if s >= SCORE_FANTASTIC: return '#0d6efd'
+    elif s >= SCORE_GREAT:     return '#198754'
+    elif s >= SCORE_FAIR:       return '#fd7e14'
+    else:                       return '#dc3545'
+
+
+def _fmt_pct(val, decimals=2) -> str:
+    """Formatea un valor 0-1 como porcentaje."""
+    try:
+        return f"{float(val)*100:.{decimals}f}%" if val is not None and str(val) not in ('nan','None','') else "—"
+    except Exception:
+        return "—"
+
+
+def _fmt_num(val, entero=True) -> str:
+    """Formatea un número."""
+    try:
+        if val is None or str(val) in ('nan','None',''):
+            return "—"
+        return str(int(round(float(val)))) if entero else f"{float(val):.2f}"
+    except Exception:
+        return "—"
+
+
+def _diff_badge(csv_val, pdf_val, is_pct=True) -> str:
+    """Badge de diferencia CSV → PDF."""
+    try:
+        a, b = float(csv_val), float(pdf_val)
+        diff = (b - a) * (100 if is_pct else 1)
+        sign = '+' if diff >= 0 else ''
+        unit = 'pp' if is_pct else ''
+        txt  = f"{sign}{diff:.2f}{unit}"
+        if abs(diff) < (0.05 if is_pct else 1):
+            return f"<span style='color:#198754;font-weight:700'>✅ {txt}</span>"
+        elif abs(diff) < (0.5 if is_pct else 5):
+            return f"<span style='color:#fd7e14;font-weight:700'>🟡 {txt}</span>"
+        else:
+            return f"<span style='color:#dc3545;font-weight:700'>🔴 {txt}</span>"
+    except Exception:
+        return "—"
+
+
+def _metric_row(label, value_raw, target, higher_is_better=True,
+                is_pct=True, is_int=False) -> str:
+    """Fila visual con barra de progreso y color vs target."""
+    if value_raw is None or str(value_raw) in ('nan','None',''):
+        return (f"<tr><td style='padding:6px 8px;color:#6c757d;"
+                f"font-size:0.83em;font-weight:600'>{label}</td>"
+                f"<td colspan='2' style='padding:6px 8px;color:#6c757d'>—</td></tr>")
+    try:
+        v = float(value_raw)
+    except Exception:
+        return ""
+
+    if is_int:
+        disp = str(int(round(v)))
+    elif is_pct:
+        disp = f"{v*100:.2f}%"
+    else:
+        disp = f"{v:.2f}"
+
+    if target is not None:
+        ok = (v >= target) if higher_is_better else (v <= target)
+        status_color = '#198754' if ok else '#dc3545'
+        status_icon  = '✅' if ok else '⚠️'
+        if is_pct:
+            bar_pct = min(100, v * 100)
+        else:
+            bar_pct = min(100, max(0, 100 - (v / max(target, 1)) * 100)) if not higher_is_better else min(100, v)
+        bar_html = (
+            f"<div style='background:#2d3748;border-radius:4px;"
+            f"height:6px;width:100%;margin-top:3px;position:relative'>"
+            f"<div style='background:{status_color};width:{bar_pct:.0f}%;"
+            f"height:6px;border-radius:4px'></div>"
+            f"</div>"
+        )
+    else:
+        status_color = '#6c757d'
+        status_icon  = ''
+        bar_html = ''
+
+    return (
+        f"<tr>"
+        f"<td style='padding:5px 8px;color:#adb5bd;font-size:0.82em;"
+        f"font-weight:600;width:40%'>{label}</td>"
+        f"<td style='padding:5px 8px;font-weight:800;color:{status_color};"
+        f"font-size:0.95em;text-align:right'>{disp}</td>"
+        f"<td style='padding:5px 8px;font-size:0.9em'>{status_icon}"
+        f"{bar_html}</td>"
+        f"</tr>"
+    )
+
+
+def _get_mini_trend(driver_id: str, df_trend_batch: "pd.DataFrame") -> str:
+    """Devuelve HTML con los últimos scores del DA como bolitas de color."""
+    if df_trend_batch.empty:
+        return ""
+    rows = df_trend_batch[df_trend_batch['driver_id'] == driver_id].tail(6)
+    if rows.empty:
+        return ""
+    dots = []
+    for r in rows.itertuples(index=False):
+        c = CALIFICACION_COLORS.get(str(r.calificacion), '#6c757d')
+        dots.append(
+            f"<span title='{r.semana}: {int(r.score)}' "
+            f"style='display:inline-block;width:22px;height:22px;"
+            f"border-radius:50%;background:{c};color:white;"
+            f"font-size:0.6em;font-weight:700;text-align:center;"
+            f"line-height:22px;margin:0 1px'>{int(r.score)}</span>"
+        )
+    return "<span style='display:inline-flex;align-items:center;gap:1px'>" + "".join(dots) + "</span>"
+
+
+def _is_still_locked(val, now_dt) -> bool:
+    """Comprueba si una cuenta sigue bloqueada."""
+    try:
+        return datetime.strptime(str(val)[:19], "%Y-%m-%d %H:%M:%S") > now_dt
+    except Exception:
+        return False
+
+
+
+def _render_pagination(page_key: str, page: int, total_pages: int,
+                       total_rows: int, page_size: int,
+                       prev_key: str = None, next_key: str = None) -> int:
+    """
+    Renderiza controles de paginación reutilizables.
+    Devuelve la página actual (puede haber cambiado).
+    """
+    if total_pages <= 1:
+        return page
+
+    if prev_key is None:
+        prev_key = f"pag_prev_{page_key}"
+    if next_key is None:
+        next_key = f"pag_next_{page_key}"
+
+    offset = page * page_size
+    nav = st.columns([1, 3, 1])
+    with nav[0]:
+        if st.button("◀ Anterior", key=prev_key,
+                     disabled=(page == 0), use_container_width=True):
+            st.session_state[page_key] = page - 1
+            st.rerun()
+    with nav[1]:
+        st.markdown(
+            f"<div style='text-align:center;padding:0.4rem 0;"
+            f"color:#6c757d;font-size:0.9em'>"
+            f"Página {page+1} de {total_pages} "
+            f"({offset+1}–{min(offset+page_size, total_rows)} de {total_rows})"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+    with nav[2]:
+        if st.button("Siguiente ▶", key=next_key,
+                     disabled=(page >= total_pages - 1), use_container_width=True):
+            st.session_state[page_key] = page + 1
+            st.rerun()
+    return st.session_state.get(page_key, page)
+
+def _clear_all_caches():
+    """Invalida todas las cachés de datos. Llamar tras cualquier escritura en BD."""
+    for _fn in [
+        cached_scorecard, cached_available_batches, cached_allowed_weeks_jt,
+        cached_executive_summary, cached_driver_trend, cached_meta,
+        cached_centro_tendencia, cached_center_targets, cached_user_centro,
+        cached_prev_week, cached_trend_batch, _cached_sidebar_stats,
+    ]:
+        try:
+            _fn.clear()
+        except Exception:
+            pass
+
+
+
 def get_user_password_hash(username: str, db_config: dict) -> str | None:
     """Obtiene el hash de contraseña de un usuario. Devuelve None si no existe."""
     try:
-        conn = scorecard.get_db_connection(db_config)
-        cursor = conn.cursor()
-        q = ("SELECT password FROM users WHERE LOWER(username) = %s AND active = 1"
-             if db_config['type'] == 'postgresql' else
-             "SELECT password FROM users WHERE LOWER(username) = ? AND active = 1")
-        cursor.execute(q, (username.strip().lower(),))
-        row = cursor.fetchone()
-        conn.close()
+        with scorecard.db_connection(db_config) as conn:
+            cursor = conn.cursor()
+            q = ("SELECT password FROM users WHERE LOWER(username) = %s AND active = 1"
+                 if db_config['type'] == 'postgresql' else
+                 "SELECT password FROM users WHERE LOWER(username) = ? AND active = 1")
+            cursor.execute(q, (username.strip().lower(),))
+            row = cursor.fetchone()
         return row[0] if row else None
     except Exception as e:
         _log.warning(f"get_user_password_hash error: {e}")
@@ -523,55 +683,38 @@ def get_user_password_hash(username: str, db_config: dict) -> str | None:
 
 
 def get_user_data(username: str, db_config: dict) -> dict | None:
-    """Obtiene username y role de un usuario activo. Devuelve None si no existe."""
+    """Obtiene username, role y must_change_password de un usuario activo."""
     try:
-        conn = scorecard.get_db_connection(db_config)
-        cursor = conn.cursor()
-        q = ("SELECT username, role FROM users WHERE LOWER(username) = %s AND active = 1"
-             if db_config['type'] == 'postgresql' else
-             "SELECT username, role FROM users WHERE LOWER(username) = ? AND active = 1")
-        cursor.execute(q, (username.strip().lower(),))
-        row = cursor.fetchone()
-        conn.close()
-        return {"name": row[0], "role": row[1]} if row else None
+        with scorecard.db_connection(db_config) as conn:
+            cursor = conn.cursor()
+            q = ("SELECT username, role, must_change_password, centro_asignado FROM users WHERE LOWER(username) = %s AND active = 1"
+                 if db_config['type'] == 'postgresql' else
+                 "SELECT username, role, must_change_password, centro_asignado FROM users WHERE LOWER(username) = ? AND active = 1")
+            cursor.execute(q, (username.strip().lower(),))
+            row = cursor.fetchone()
+        if not row:
+            return None
+        return {"name": row[0], "role": row[1], "must_change_password": bool(row[2]), "centro_asignado": row[3]}
     except Exception as e:
         _log.warning(f"get_user_data error: {e}")
         return None
 
 
 def update_user_password(username: str, new_hash: str, db_config: dict) -> bool:
-    """Actualiza el hash de contraseña y limpia must_change_password."""
-    try:
-        conn = scorecard.get_db_connection(db_config)
-        cursor = conn.cursor()
-        q = ("UPDATE users SET password = %s, must_change_password = 0 WHERE username = %s"
-             if db_config['type'] == 'postgresql' else
-             "UPDATE users SET password = ?, must_change_password = 0 WHERE username = ?")
-        cursor.execute(q, (new_hash, username))
-        conn.commit()
-        conn.close()
-        return True
-    except Exception as e:
-        _log.warning(f"update_user_password error: {e}")
-        return False
+    """Wrapper → scorecard.update_user_password (definida en motor.py para testabilidad)."""
+    return scorecard.update_user_password(username, new_hash, db_config)
 
 
 def get_user_role(username: str, db_config: dict) -> str | None:
-    """
-    Devuelve el rol de un usuario activo o None si no existe / está desactivado.
-    Filtrar por active = 1 es consistente con get_user_data() y get_user_password_hash().
-    Sin este filtro, un usuario desactivado podría seguir siendo reconocido como superadmin
-    en las comprobaciones de permisos aunque no pueda hacer login.
-    """
+    """Devuelve el rol de un usuario o None si no existe."""
     try:
-        conn = scorecard.get_db_connection(db_config)
-        cursor = conn.cursor()
-        q = ("SELECT role FROM users WHERE LOWER(username) = %s AND active = 1"
-             if db_config['type'] == 'postgresql' else
-             "SELECT role FROM users WHERE LOWER(username) = ? AND active = 1")
-        cursor.execute(q, (username.strip().lower(),))
-        row = cursor.fetchone()
-        conn.close()
+        with scorecard.db_connection(db_config) as conn:
+            cursor = conn.cursor()
+            q = ("SELECT role FROM users WHERE LOWER(username) = %s AND active = 1"
+                 if db_config['type'] == 'postgresql' else
+                 "SELECT role FROM users WHERE LOWER(username) = ? AND active = 1")
+            cursor.execute(q, (username.strip().lower(),))
+            row = cursor.fetchone()
         return row[0] if row else None
     except Exception as e:
         _log.warning(f"get_user_role error: {e}")
@@ -581,11 +724,17 @@ def get_user_role(username: str, db_config: dict) -> str | None:
 # ── Renderers HTML ─────────────────────────────────────────────────────────────
 
 CALIFICACION_COLORS = {
-    '💎 FANTASTIC': '#198754',
-    '🥇 GREAT':     '#0d6efd',
+    '💎 FANTASTIC': '#0d6efd',
+    '🥇 GREAT':     '#198754',
     '⚠️ FAIR':      '#fd7e14',
     '🛑 POOR':      '#dc3545',
 }
+
+# Umbrales de score — fuente única de verdad para colores y gráficos
+SCORE_FANTASTIC = 90
+SCORE_GREAT     = 80
+SCORE_FAIR      = 60
+# < SCORE_FAIR → POOR → dc3545
 
 ISSUE_COLORS = {
     '🚨': '#dc3545',   # DNR crítico
@@ -632,54 +781,9 @@ def render_detalles(detalles_str: str) -> str:
     return ' '.join(html_parts)
 
 
-def render_score_bar(score: float) -> str:
-    """Mini barra de progreso HTML para el score."""
-    color = CALIFICACION_COLORS.get(
-        '💎 FANTASTIC' if score >= 90 else
-        '🥇 GREAT' if score >= 80 else
-        '⚠️ FAIR' if score >= 60 else '🛑 POOR',
-        '#6c757d'
-    )
-    pct = max(0, min(100, score))
-    return (
-        f'<div style="display:flex;align-items:center;gap:6px">'
-        f'<div style="flex:1;background:#e9ecef;border-radius:4px;height:8px">'
-        f'<div style="width:{pct}%;background:{color};height:8px;border-radius:4px"></div></div>'
-        f'<span style="font-weight:700;color:{color};min-width:28px">{int(score)}</span>'
-        f'</div>'
-    )
 
 
-def delta_arrow(current: float, previous: float, higher_is_better: bool = True) -> str:
-    """Flecha coloreada indicando mejora/empeora respecto a semana anterior."""
-    if previous is None or pd.isna(previous):
-        return ''
-    diff = current - previous
-    if abs(diff) < 0.001:
-        return '<span style="color:#6c757d">→ =</span>'
-    improved = (diff > 0) == higher_is_better
-    arrow = '▲' if diff > 0 else '▼'
-    color = '#198754' if improved else '#dc3545'
-    fmt = f'{diff:+.2f}'
-    return f'<span style="color:{color};font-size:0.85em">{arrow} {fmt}</span>'
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DB CONFIG + INIT
-# ─────────────────────────────────────────────────────────────────────────────
-
-db_config = get_db_config()
-
-# init_database UNA SOLA VEZ por sesión (no en cada render)
-if "db_initialized" not in st.session_state:
-    scorecard.init_database(db_config)
-    st.session_state["db_initialized"] = True
-
-_DB_KEY = db_config_key(db_config)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# LOGIN
-# ─────────────────────────────────────────────────────────────────────────────
 
 def check_login() -> bool:
     if "user" not in st.session_state:
@@ -702,8 +806,8 @@ def check_login() -> bool:
                     try:
                         uname = username.strip().lower()
 
-                        # ── Comprobar si está bloqueado ─────────────────────
-                        locked, remaining = _is_locked(uname)
+                        # ── Comprobar si está bloqueado (BD persistente) ────
+                        locked, remaining = scorecard.check_login_locked(uname, db_config)
                         if locked:
                             mins = remaining // 60
                             secs = remaining % 60
@@ -718,39 +822,72 @@ def check_login() -> bool:
                         pw_hash = get_user_password_hash(uname, db_config)
                         if pw_hash and scorecard.verify_password(password, pw_hash):
                             user_info = get_user_data(uname, db_config)
-                            _clear_attempts(uname)
+                            scorecard.record_login_attempt(uname, success=True, db_config=db_config)
                             st.session_state["user"] = user_info
                             st.session_state["last_activity"] = datetime.now()
+                            st.session_state["login_time"] = datetime.now()
+                            if user_info and user_info.get("must_change_password"):
+                                st.session_state["force_change_pw"] = True
                             _audit(f"Login exitoso ({user_info['role']})")
                             st.rerun()
                         else:
-                            _register_failed_attempt(uname)
-                            # Leer el contador actualizado desde la BD (fuente de verdad)
-                            row = _rate_limit_row(uname)
-                            current_count  = row["count"] if row else 1
-                            remaining_tries = max(0, MAX_LOGIN_ATTEMPTS - current_count)
-                            _audit(f"Login fallido para '{uname}' (intentos restantes: {remaining_tries})")
+                            scorecard.record_login_attempt(
+                                uname, success=False, db_config=db_config,
+                                max_attempts=MAX_LOGIN_ATTEMPTS,
+                                lockout_minutes=LOGIN_LOCKOUT_MINUTES,
+                            )
+                            # Comprobar si acaba de quedar bloqueado tras este intento
+                            now_locked, _ = scorecard.check_login_locked(uname, db_config)
+                            _audit(f"Login fallido para '{uname}'")
 
-                            if remaining_tries <= 0:
+                            if now_locked:
                                 st.error(
                                     f"🔒 Demasiados intentos fallidos. "
                                     f"Cuenta bloqueada durante **{LOGIN_LOCKOUT_MINUTES} minutos**."
                                 )
                             else:
-                                st.error(
-                                    f"❌ Usuario o contraseña incorrectos. "
-                                    f"({remaining_tries} intento{'s' if remaining_tries != 1 else ''} restante{'s' if remaining_tries != 1 else ''})"
-                                )
+                                st.error("❌ Usuario o contraseña incorrectos.")
                     except Exception as e:
                         st.error(f"❌ Error de conexión: {e}")
         return False
     return True
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# INICIALIZACIÓN DE BASE DE DATOS
+# ─────────────────────────────────────────────────────────────────────────────
+db_config = get_db_config()
+_DB_KEY   = db_config_key(db_config)
+scorecard.init_database(db_config)
+
 if not check_login():
     st.stop()
 
 check_session_timeout()
+
+# ── Forzar cambio de contraseña (primer acceso o reset por admin) ─────────────
+if st.session_state.get("force_change_pw"):
+    st.warning("🔐 **Debes cambiar tu contraseña antes de continuar.**")
+    with st.form("force_pw_form"):
+        new_pw_f  = st.text_input("Nueva contraseña (mínimo 8 caracteres)", type="password")
+        conf_pw_f = st.text_input("Confirmar contraseña", type="password")
+        submitted = st.form_submit_button("💾 Guardar y continuar", type="primary", use_container_width=True)
+        if submitted:
+            if len(new_pw_f) < 8:
+                st.error("❌ La contraseña debe tener al menos 8 caracteres.")
+            elif new_pw_f != conf_pw_f:
+                st.error("❌ Las contraseñas no coinciden.")
+            else:
+                _uname_f = st.session_state["user"]["name"]
+                new_hash = scorecard.hash_password(new_pw_f)
+                if update_user_password(_uname_f, new_hash, db_config):
+                    st.session_state.pop("force_change_pw", None)
+                    _audit("Cambió contraseña obligatoria")
+                    st.success("✅ Contraseña actualizada. Accediendo...")
+                    st.rerun()
+                else:
+                    st.error("❌ Error al guardar la contraseña. Contacta con un administrador.")
+    st.stop()
 
 user_data_session = st.session_state["user"]
 user_role  = user_data_session.get("role", "guest")
@@ -766,6 +903,12 @@ is_jt         = (user_role == "jt")
 
 ALLOWED_WEEKS_JT = (
     cached_allowed_weeks_jt(_DB_KEY, db_config)
+    if is_jt else None
+)
+
+# Centro asignado al JT (None = sin restricción — ve todos los centros)
+JT_CENTRO = (
+    cached_user_centro(_DB_KEY, db_config, user_data_session['name'])
     if is_jt else None
 )
 
@@ -798,14 +941,18 @@ with st.sidebar:
     with st.expander("📊 Estado del Sistema", expanded=False):
         bd_label = "🌐 Supabase" if db_config['type'] == 'postgresql' else "💾 SQLite"
         st.caption(bd_label)
-        status = cached_db_status(_DB_KEY, db_config)
-        if status["ok"]:
-            st.metric("Registros totales", f"{status['n_rec']:,}")
-            st.metric("Semanas en BD", status["n_weeks"])
-            if status["semana"]:
-                st.success(f"Semana activa: **{status['semana']}**")
-        else:
+        try:
+            n_rec, n_weeks, latest = _cached_sidebar_stats(_DB_KEY, db_config)
+            st.metric("Registros totales", f"{n_rec:,}")
+            st.metric("Semanas en BD", n_weeks)
+            if latest:
+                st.success(f"Semana activa: **{latest[0]}**")
+        except Exception:
             st.warning("BD no disponible")
+        # Aviso de seguridad si bcrypt no está disponible
+        if not scorecard.HAS_BCRYPT:
+            st.warning("⚠️ **bcrypt no instalado** — contraseñas protegidas con SHA-256 (menos seguro). "
+                       "Ejecuta `pip install bcrypt` para activar el hash seguro.")
 
     if is_jt and ALLOWED_WEEKS_JT:
         st.divider()
@@ -814,7 +961,8 @@ with st.sidebar:
         st.markdown(f"""
         <div style='font-size:0.85em;color:#6c757d'>
         📅 <b>Semana en curso:</b> {semana_actual}<br>
-        📅 <b>Semana anterior:</b> {semana_prev}
+        📅 <b>Semana anterior:</b> {semana_prev}<br>
+        🏢 <b>Centro:</b> {JT_CENTRO if JT_CENTRO else "Todos"}
         </div>
         """, unsafe_allow_html=True)
 
@@ -887,7 +1035,7 @@ if tab_dash:
                         <div style='font-size:0.8em;opacity:0.7'>Score Global</div>
                     </div>
                     <div style='text-align:center'>
-                        <div style='font-size:2em;font-weight:800;color:#198754'>{total_fantastic}</div>
+                        <div style='font-size:2em;font-weight:800;color:#0d6efd'>{total_fantastic}</div>
                         <div style='font-size:0.8em;opacity:0.7'>💎 FANTASTIC</div>
                     </div>
                     <div style='text-align:center'>
@@ -902,17 +1050,15 @@ if tab_dash:
             st.subheader("🏆 Ranking de Centros")
 
             rank_cols = st.columns(min(n_centros, 4))
-            for i, (_, row) in enumerate(df_exec.iterrows()):
+            for i, row in enumerate(df_exec.itertuples(index=False)):
                 col = rank_cols[i % len(rank_cols)]
                 delta_score = None
-                if row['score_prev'] is not None:
-                    delta_score = round(row['score_medio'] - row['score_prev'], 1)
+                if row.score_prev is not None:
+                    delta_score = round(row.score_medio - row.score_prev, 1)
 
                 medal = {0: '🥇', 1: '🥈', 2: '🥉'}.get(i, f"#{i+1}")
                 score_color = (
-                    '#198754' if row['score_medio'] >= 90 else
-                    '#0d6efd' if row['score_medio'] >= 80 else
-                    '#fd7e14' if row['score_medio'] >= 60 else '#dc3545'
+                    _score_color(row.score_medio)
                 )
 
                 delta_html = ''
@@ -925,17 +1071,17 @@ if tab_dash:
                 <div style='border:2px solid {score_color};border-radius:12px;padding:1rem;
                             text-align:center;background:{score_color}10'>
                     <div style='font-size:1.4em'>{medal}</div>
-                    <div style='font-size:1.1em;font-weight:800;color:{score_color}'>{row['centro']}</div>
-                    <div style='font-size:0.8em;color:#6c757d'>{row['semana']}</div>
-                    <div style='font-size:2.5em;font-weight:900;color:{score_color};line-height:1.1'>{row['score_medio']}</div>
+                    <div style='font-size:1.1em;font-weight:800;color:{score_color}'>{row.centro}</div>
+                    <div style='font-size:0.8em;color:#6c757d'>{row.semana}</div>
+                    <div style='font-size:2.5em;font-weight:900;color:{score_color};line-height:1.1'>{row.score_medio}</div>
                     <div>{delta_html}</div>
                     <hr style='margin:0.5rem 0;border-color:{score_color}30'>
-                    <div style='font-size:0.8em;color:#6c757d'>{row['total']} conductores</div>
+                    <div style='font-size:0.8em;color:#6c757d'>{row.total} conductores</div>
                     <div style='font-size:0.8em'>
-                        <span style='color:#198754'>💎{row["n_fantastic"]}</span> &nbsp;
-                        <span style='color:#0d6efd'>🥇{row["n_great"]}</span> &nbsp;
-                        <span style='color:#fd7e14'>⚠️{row["n_fair"]}</span> &nbsp;
-                        <span style='color:#dc3545'>🛑{row["n_poor"]}</span>
+                        <span style='color:#0d6efd'>💎{row.n_fantastic}</span> &nbsp;
+                        <span style='color:#198754'>🥇{row.n_great}</span> &nbsp;
+                        <span style='color:#fd7e14'>⚠️{row.n_fair}</span> &nbsp;
+                        <span style='color:#dc3545'>🛑{row.n_poor}</span>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -946,16 +1092,14 @@ if tab_dash:
             st.subheader("📊 Métricas Comparativas")
 
             rows_html = []
-            for i, (_, row) in enumerate(df_exec.iterrows()):
+            for i, row in enumerate(df_exec.itertuples(index=False)):
                 bg = '#ffffff' if i % 2 == 0 else '#f8f9fa'
                 score_c = (
-                    '#198754' if row['score_medio'] >= 90 else
-                    '#0d6efd' if row['score_medio'] >= 80 else
-                    '#fd7e14' if row['score_medio'] >= 60 else '#dc3545'
+                    _score_color(row.score_medio)
                 )
                 delta_score = None
-                if row['score_prev'] is not None:
-                    delta_score = round(row['score_medio'] - row['score_prev'], 1)
+                if row.score_prev is not None:
+                    delta_score = round(row.score_medio - row.score_prev, 1)
 
                 delta_cell = ''
                 if delta_score is not None:
@@ -966,21 +1110,21 @@ if tab_dash:
                 # Barra de % top2
                 pct_bar = f"""<div style='display:flex;align-items:center;gap:6px'>
                     <div style='flex:1;background:#e9ecef;border-radius:3px;height:6px'>
-                    <div style='width:{row["pct_top2"]}%;background:{score_c};height:6px;border-radius:3px'></div></div>
-                    <span style='font-size:0.85em;font-weight:700;color:{score_c}'>{row["pct_top2"]}%</span></div>"""
+                    <div style='width:{row.pct_top2}%;background:{score_c};height:6px;border-radius:3px'></div></div>
+                    <span style='font-size:0.85em;font-weight:700;color:{score_c}'>{row.pct_top2}%</span></div>"""
 
                 rows_html.append(f"""
                 <tr style='background:{bg}'>
-                    <td style='padding:8px 10px;font-weight:700'>{row['centro']}</td>
-                    <td style='padding:8px 10px;color:#6c757d'>{row['semana']}</td>
-                    <td style='padding:8px 10px;font-weight:800;color:{score_c};font-size:1.1em'>{row['score_medio']}</td>
+                    <td style='padding:8px 10px;font-weight:700'>{row.centro}</td>
+                    <td style='padding:8px 10px;color:#6c757d'>{row.semana}</td>
+                    <td style='padding:8px 10px;font-weight:800;color:{score_c};font-size:1.1em'>{row.score_medio}</td>
                     <td style='padding:8px 10px'>{delta_cell}</td>
-                    <td style='padding:8px 10px;text-align:center'><b style='color:{"#dc3545" if row["dnr_medio"]>=2 else "#198754"}'>{row['dnr_medio']:.2f}</b></td>
-                    <td style='padding:8px 10px;text-align:center'>{row['dcr_medio']:.2f}%</td>
-                    <td style='padding:8px 10px;text-align:center'>{row['pod_medio']:.2f}%</td>
+                    <td style='padding:8px 10px;text-align:center'><b style='color:{"#dc3545" if row.dnr_medio>=2 else "#198754"}'>{row.dnr_medio:.2f}</b></td>
+                    <td style='padding:8px 10px;text-align:center'>{row.dcr_medio:.2f}%</td>
+                    <td style='padding:8px 10px;text-align:center'>{row.pod_medio:.2f}%</td>
                     <td style='padding:8px 10px'>{pct_bar}</td>
-                    <td style='padding:8px 10px;text-align:center;color:#dc3545;font-weight:700'>{row['n_poor']}</td>
-                    <td style='padding:8px 10px;text-align:center;color:#6c757d'>{row['total']}</td>
+                    <td style='padding:8px 10px;text-align:center;color:#dc3545;font-weight:700'>{row.n_poor}</td>
+                    <td style='padding:8px 10px;text-align:center;color:#6c757d'>{row.total}</td>
                 </tr>
                 """)
 
@@ -1009,15 +1153,143 @@ if tab_dash:
 
             # ── Gráfico de barras: Score por centro ────────────────────────
             st.subheader("📈 Score Medio por Centro")
-            df_chart = df_exec[['centro', 'score_medio']].set_index('centro')
-            st.bar_chart(df_chart, height=300, use_container_width=True)
+            df_chart = df_exec[['centro', 'score_medio']].fillna(0).copy()
+            if not df_chart.empty:
+                _y_min = max(0, float(df_chart['score_medio'].min()) - 12)
+                _y_max = min(100, float(df_chart['score_medio'].max()) + 8)
+                df_chart['color'] = df_chart['score_medio'].apply(_score_color)
+                df_chart['label'] = df_chart['score_medio'].apply(lambda x: f"{x:.1f}")
+                _bars = (alt.Chart(df_chart)
+                    .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6, size=min(80, max(20, 500 // max(1, len(df_chart)))))
+                    .encode(
+                        x=alt.X('centro:N', axis=alt.Axis(labelAngle=0), title='Centro'),
+                        y=alt.Y('score_medio:Q', scale=alt.Scale(domain=[_y_min, _y_max]),
+                                title='Score Medio'),
+                        color=alt.Color('color:N', scale=None, legend=None),
+                        tooltip=[alt.Tooltip('centro:N', title='Centro'),
+                                 alt.Tooltip('score_medio:Q', title='Score', format='.1f')]
+                    ).properties(height=280))
+                _text = (alt.Chart(df_chart)
+                    .mark_text(dy=-8, fontSize=14, fontWeight='bold', color='white')
+                    .encode(x=alt.X('centro:N'),
+                            y=alt.Y('score_medio:Q', scale=alt.Scale(domain=[_y_min, _y_max])),
+                            text=alt.Text('label:N')))
+                st.altair_chart(_bars + _text, use_container_width=True)
 
             # ── Distribución global POOR ───────────────────────────────────
             if df_exec['n_poor'].sum() > 0:
                 st.markdown("---")
                 st.subheader("🚨 Conductores POOR por Centro")
-                df_poor_chart = df_exec[df_exec['n_poor'] > 0][['centro', 'n_poor']].set_index('centro')
-                st.bar_chart(df_poor_chart, height=250, use_container_width=True)
+                df_poor_chart = df_exec[df_exec['n_poor'] > 0][['centro', 'n_poor']].copy()
+                if not df_poor_chart.empty:
+                    df_poor_chart['label'] = df_poor_chart['n_poor'].astype(str)
+                    _top_poor = int(df_poor_chart['n_poor'].max()) + 3
+                    _bars_p = (alt.Chart(df_poor_chart)
+                        .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6, color='#dc3545', size=min(80, max(20, 500 // max(1, len(df_poor_chart)))))
+                        .encode(
+                            x=alt.X('centro:N', axis=alt.Axis(labelAngle=0), title='Centro'),
+                            y=alt.Y('n_poor:Q', title='Nº POOR',
+                                    scale=alt.Scale(domain=[0, _top_poor]),
+                                    axis=alt.Axis(format='d')),
+                            tooltip=[alt.Tooltip('centro:N', title='Centro'),
+                                     alt.Tooltip('n_poor:Q', title='POOR')]
+                        ).properties(height=230))
+                    _text_p = (alt.Chart(df_poor_chart)
+                        .mark_text(dy=-8, fontSize=14, fontWeight='bold', color='white')
+                        .encode(x=alt.X('centro:N'),
+                                y=alt.Y('n_poor:Q', scale=alt.Scale(domain=[0, _top_poor])),
+                                text=alt.Text('label:N')))
+                    st.altair_chart(_bars_p + _text_p, use_container_width=True)
+
+            # ── G) Tendencia semanal por centro ───────────────────────────
+            st.markdown("---")
+            st.subheader("📉 Tendencia Semanal por Centro")
+            st.caption("Evolución del score medio y distribución de calificaciones semana a semana.")
+
+            centros_trend = sorted(df_exec['centro'].tolist())
+            sel_trend_centro = st.selectbox("Seleccionar centro", centros_trend,
+                                            key="trend_centro_dashboard")
+
+            df_trend_c = cached_centro_tendencia(_DB_KEY, db_config, sel_trend_centro)
+
+            if df_trend_c.empty or len(df_trend_c) < 2:
+                st.info("Se necesitan al menos 2 semanas de datos para mostrar la tendencia.")
+            else:
+                tc1, tc2 = st.columns(2)
+                with tc1:
+                    st.markdown("**Score medio**")
+                    _df_score = df_trend_c[['semana', 'score_medio']].copy()
+                    _s_min = max(0, float(_df_score['score_medio'].min()) - 10)
+                    _s_max = min(100, float(_df_score['score_medio'].max()) + 10)
+                    st.altair_chart(
+                        alt.Chart(_df_score)
+                        .mark_line(point=True, strokeWidth=3, color='#0d6efd')
+                        .encode(
+                            x=alt.X('semana:N', title='Semana'),
+                            y=alt.Y('score_medio:Q', scale=alt.Scale(domain=[_s_min, _s_max]),
+                                    title='Score'),
+                            tooltip=[alt.Tooltip('semana:N'), alt.Tooltip('score_medio:Q', format='.1f')]
+                        ).properties(height=220),
+                        use_container_width=True
+                    )
+                with tc2:
+                    st.markdown("**DNR medio**")
+                    _df_dnr = df_trend_c[['semana', 'dnr_medio']].copy()
+                    _d_max = max(1.0, float(_df_dnr['dnr_medio'].max()) * 1.3)
+                    st.altair_chart(
+                        alt.Chart(_df_dnr)
+                        .mark_line(point=True, strokeWidth=3, color='#dc3545')
+                        .encode(
+                            x=alt.X('semana:N', title='Semana'),
+                            y=alt.Y('dnr_medio:Q', scale=alt.Scale(domain=[0, _d_max]),
+                                    title='DNR'),
+                            tooltip=[alt.Tooltip('semana:N'), alt.Tooltip('dnr_medio:Q', format='.2f')]
+                        ).properties(height=220),
+                        use_container_width=True
+                    )
+
+                # Distribución apilada en tabla visual
+                st.markdown("**Distribución de calificaciones por semana (%)**")
+                df_dist = df_trend_c[['semana','pct_fantastic','pct_great','pct_fair','pct_poor']].copy()
+                df_dist.columns = ['Semana','💎 FANTASTIC','🥇 GREAT','⚠️ FAIR','🛑 POOR']
+
+                rows_dist = []
+                for _, r in df_dist.iterrows():
+                    bar_html = ""
+                    for col, color in [('💎 FANTASTIC','#0d6efd'),('🥇 GREAT','#198754'),
+                                       ('⚠️ FAIR','#fd7e14'),('🛑 POOR','#dc3545')]:
+                        w = max(0, min(100, r[col]))
+                        if w > 0:
+                            bar_html += (f"<div style='display:inline-block;width:{w}%;height:18px;"
+                                         f"background:{color};vertical-align:middle' "
+                                         f"title='{col}: {w:.1f}%'></div>")
+                    rows_dist.append(
+                        f"<tr><td style='padding:6px 10px;font-weight:600'>{r['Semana']}</td>"
+                        f"<td style='padding:6px 10px'>{r['💎 FANTASTIC']:.1f}%</td>"
+                        f"<td style='padding:6px 10px'>{r['🥇 GREAT']:.1f}%</td>"
+                        f"<td style='padding:6px 10px'>{r['⚠️ FAIR']:.1f}%</td>"
+                        f"<td style='padding:6px 10px;color:#dc3545;font-weight:700'>{r['🛑 POOR']:.1f}%</td>"
+                        f"<td style='padding:6px 10px;min-width:160px'>"
+                        f"<div style='background:#e9ecef;border-radius:3px;overflow:hidden'>{bar_html}</div>"
+                        f"</td></tr>"
+                    )
+
+                st.markdown(f"""
+                <div style='overflow-x:auto;border-radius:8px;border:1px solid #dee2e6'>
+                <table style='width:100%;border-collapse:collapse;font-size:0.88em'>
+                    <thead>
+                        <tr style='background:#232f3e;color:white'>
+                            <th style='padding:8px 10px;text-align:left'>Semana</th>
+                            <th style='padding:8px 10px'>💎 FANTAS.</th>
+                            <th style='padding:8px 10px'>🥇 GREAT</th>
+                            <th style='padding:8px 10px'>⚠️ FAIR</th>
+                            <th style='padding:8px 10px'>🛑 POOR</th>
+                            <th style='padding:8px 10px;text-align:left'>Distribución</th>
+                        </tr>
+                    </thead>
+                    <tbody>{''.join(rows_dist)}</tbody>
+                </table></div>
+                """, unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1042,12 +1314,14 @@ if tab_proc:
                 bk = (week, center)
                 if bk not in batches:
                     batches[bk] = {
-                        'concessions': [], 'quality': [], 'false_scan': [],
+                        'concessions': [], 'dsc_concessions': [], 'quality': [], 'false_scan': [],
                         'dwc': [], 'fdps': [], 'daily': [], 'official': [],
                         'files_count': 0
                     }
                 name = f.name.lower()
-                if re.match(scorecard.Config.PATTERN_CONCESSIONS, name, re.IGNORECASE):
+                if re.match(scorecard.Config.PATTERN_DSC_CONCESSIONS, name, re.IGNORECASE):
+                    batches[bk]['dsc_concessions'].append(f)
+                elif re.match(scorecard.Config.PATTERN_CONCESSIONS, name, re.IGNORECASE):
                     batches[bk]['concessions'].append(f)
                 elif re.match(scorecard.Config.PATTERN_QUALITY, name, re.IGNORECASE):
                     batches[bk]['quality'].append(f)
@@ -1087,7 +1361,7 @@ if tab_proc:
 
                     st.divider()
                     st.subheader("🎯 Targets de Calidad")
-                    curr_t = scorecard.get_center_targets(center, db_config=db_config)
+                    curr_t = cached_center_targets(_DB_KEY, db_config, center)
                     col1, col2, col3, col4 = st.columns(4)
                     t_dnr  = col1.number_input("DNR Max",    value=float(curr_t['target_dnr']),
                                                min_value=0.0, max_value=20.0, step=0.5,
@@ -1119,13 +1393,16 @@ if tab_proc:
                                     'target_fdps': 0.98, 'target_rts': 0.01, 'target_cdf': 0.95
                                 }
                                 scorecard.save_center_targets(new_t, db_config=db_config)
+                                cached_center_targets.clear()
                                 current_week   = week_manual if week_manual else week
                                 current_center = center_manual if center_manual else center
                                 scorecard.delete_scorecard_batch(current_week, current_center, db_config=db_config)
 
                                 df = scorecard.process_single_batch(
                                     data['concessions'], data['quality'], data['false_scan'],
-                                    data['dwc'], data['fdps'], data['daily'], targets=new_t
+                                    data['dwc'], data['fdps'], data['daily'],
+                                    path_dsc_concessions=data.get('dsc_concessions') or None,
+                                    targets=new_t
                                 )
                                 if df is not None:
                                     ok = scorecard.save_to_database(
@@ -1140,6 +1417,25 @@ if tab_proc:
 
                                     if ok:
                                         st.success(f"✅ {len(df)} conductores procesados y guardados.")
+
+                                        # ── H) Alertas automáticas ──────────────────────
+                                        try:
+                                            smtp_cfg   = dict(st.secrets.get("smtp", {})) if hasattr(st, 'secrets') else {}
+                                            alert_mail = st.secrets.get("alert_email", "") if hasattr(st, 'secrets') else ""
+                                            if smtp_cfg and alert_mail:
+                                                n_alerted = scorecard.check_and_send_alerts(
+                                                    current_week, current_center,
+                                                    smtp_cfg=smtp_cfg,
+                                                    alert_email=alert_mail,
+                                                    db_config=db_config
+                                                )
+                                                if n_alerted > 0:
+                                                    st.warning(
+                                                        f"⚠️ Alerta enviada: {n_alerted} conductor(es) "
+                                                        f"en POOR 2 semanas consecutivas."
+                                                    )
+                                        except Exception as _ae:
+                                            _log.warning(f"Alertas: {_ae}")
                                     else:
                                         st.warning("⚠️ Procesado pero error al guardar en BD.")
 
@@ -1163,6 +1459,142 @@ if tab_proc:
                                 else:
                                     st.error("❌ Error en el procesamiento. Verifica los archivos.")
 
+        # ── I) Importación histórica masiva (ZIP) ─────────────────────────
+        if is_admin:
+            st.divider()
+            st.subheader("📦 Importación Histórica Masiva")
+            st.markdown(
+                "Sube un ZIP con carpetas organizadas por semana/centro. "
+                "Cada carpeta debe contener los mismos archivos que el procesamiento normal."
+            )
+            with st.expander("📋 Estructura esperada del ZIP", expanded=False):
+                st.code(
+                    "historico.zip\n"
+                    "├── DIC1_W01/\n"
+                    "│   ├── concessions_DIC1_W01.csv\n"
+                    "│   ├── quality_overview_DIC1_W01.csv\n"
+                    "│   └── false_scan_DIC1_W01.html\n"
+                    "├── DIC1_W02/\n"
+                    "│   └── ...\n"
+                    "└── MAD1_W01/\n"
+                    "    └── ...",
+                    language="text"
+                )
+
+            zip_file = st.file_uploader("📁 Subir ZIP histórico", type=["zip"], key="bulk_zip")
+
+            if zip_file:
+                if st.button("🚀 Procesar ZIP completo", type="primary", use_container_width=True):
+                    with st.spinner("Procesando archivos del ZIP..."):
+                        results_bulk = []
+                        errors_bulk  = []
+
+                        with tempfile.TemporaryDirectory() as tmpdir:
+                            # Extraer ZIP
+                            try:
+                                with zipfile.ZipFile(zip_file, 'r') as zf:
+                                    zf.extractall(tmpdir)
+                            except zipfile.BadZipFile:
+                                st.error("❌ El archivo no es un ZIP válido.")
+                                st.stop()
+
+                            # Recorrer carpetas (nivel 1)
+                            root = pathlib.Path(tmpdir)
+                            folders = sorted([f for f in root.rglob('*') if f.is_dir()])
+                            if not folders:
+                                folders = [root]  # Si no hay subcarpetas, usar raíz
+
+                            prog = st.progress(0)
+                            total_folders = max(len(folders), 1)
+
+                            for i, folder in enumerate(folders):
+                                files_in_folder = list(folder.iterdir())
+                                if not files_in_folder:
+                                    continue
+
+                                # Detectar semana/centro desde la carpeta o los archivos
+                                folder_name = folder.name
+                                week_f, center_f = scorecard.extract_info_from_path(folder_name)
+                                if week_f == 'N/A':
+                                    # Intentar desde algún archivo dentro
+                                    for ff in files_in_folder:
+                                        ww, cc = scorecard.extract_info_from_path(ff.name)
+                                        if ww != 'N/A':
+                                            week_f, center_f = ww, cc
+                                            break
+
+                                # Clasificar archivos
+                                batch_files: dict = {k: [] for k in ['concessions','dsc_concessions','quality','false_scan','dwc','fdps','daily']}
+                                for ff in files_in_folder:
+                                    fn = ff.name.lower()
+                                    if ff.suffix.lower() not in ['.csv','.xlsx','.html','.xls']:
+                                        continue
+                                    if re.match(scorecard.Config.PATTERN_DSC_CONCESSIONS, fn, re.IGNORECASE):
+                                        batch_files['dsc_concessions'].append(str(ff))
+                                    elif re.match(scorecard.Config.PATTERN_CONCESSIONS, fn, re.IGNORECASE):
+                                        batch_files['concessions'].append(str(ff))
+                                    elif re.match(scorecard.Config.PATTERN_QUALITY, fn, re.IGNORECASE):
+                                        batch_files['quality'].append(str(ff))
+                                    elif re.match(scorecard.Config.PATTERN_FALSE_SCAN, fn, re.IGNORECASE):
+                                        batch_files['false_scan'].append(str(ff))
+                                    elif re.match(scorecard.Config.PATTERN_DWC, fn, re.IGNORECASE):
+                                        batch_files['dwc'].append(str(ff))
+                                    elif re.match(scorecard.Config.PATTERN_FDPS, fn, re.IGNORECASE):
+                                        batch_files['fdps'].append(str(ff))
+                                    elif re.match(scorecard.Config.PATTERN_DAILY, fn, re.IGNORECASE):
+                                        batch_files['daily'].append(str(ff))
+
+                                if not batch_files['concessions']:
+                                    errors_bulk.append(f"⬜ {folder.name}: sin archivo Concessions")
+                                    prog.progress((i+1)/total_folders)
+                                    continue
+
+                                # Obtener targets del centro
+                                t_bulk = scorecard.get_center_targets(center_f, db_config=db_config)
+
+                                df_bulk = scorecard.process_single_batch(
+                                    batch_files['concessions'],
+                                    batch_files['quality']          or None,
+                                    batch_files['false_scan']       or None,
+                                    batch_files['dwc']              or None,
+                                    batch_files['fdps']             or None,
+                                    batch_files['daily']            or None,
+                                    path_dsc_concessions=batch_files.get('dsc_concessions') or None,
+                                    targets=t_bulk
+                                )
+
+                                if df_bulk is not None:
+                                    ok_b = scorecard.save_to_database(
+                                        df_bulk, week_f, center_f,
+                                        db_config=db_config,
+                                        uploaded_by=f"{user_data_session['name']} (bulk)"
+                                    )
+                                    status = "✅" if ok_b else "⚠️"
+                                    results_bulk.append(
+                                        f"{status} {center_f} {week_f} — {len(df_bulk)} conductores"
+                                    )
+                                    _audit(f"Bulk import: {center_f} {week_f} — {len(df_bulk)} conductores")
+                                else:
+                                    errors_bulk.append(f"❌ {folder.name}: error en procesamiento")
+
+                                    prog.progress((i+1)/total_folders)
+
+                        prog.progress(1.0)
+
+                        # Invalidar cachés
+                        _clear_all_caches()
+
+                        # Resumen
+                        st.success(f"✅ Importación completada: {len(results_bulk)} lotes procesados.")
+                        if results_bulk:
+                            st.markdown("**Resultados:**")
+                            for r in results_bulk:
+                                st.markdown(f"- {r}")
+                        if errors_bulk:
+                            st.markdown("**Carpetas con problemas:**")
+                            for e in errors_bulk:
+                                st.markdown(f"- {e}")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB: DSP SCORECARD PDF (sin cambios funcionales)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1178,88 +1610,132 @@ if tab_dsp:
         )
 
         if uploaded_pdfs:
-            for pdf_file in uploaded_pdfs:
-                st.markdown(f"**📄 {pdf_file.name}**")
-                with st.spinner(f"Procesando {pdf_file.name}..."):
-                    parsed = scorecard.parse_dsp_scorecard_pdf(pdf_file.read())
+            # ── PASO 1: Parsear todos los PDFs de una vez ─────────────────
+            _pdf_key = f"_dsp_parsed_{','.join(f.name for f in uploaded_pdfs)}"
+            if st.session_state.get('_dsp_pdf_key') != _pdf_key:
+                _all_parsed = []
+                _prog = st.progress(0, text="Procesando PDFs...")
+                for _i, _pdf_file in enumerate(uploaded_pdfs):
+                    _prog.progress((_i) / len(uploaded_pdfs), text=f"Leyendo {_pdf_file.name}...")
+                    _p = scorecard.parse_dsp_scorecard_pdf(_pdf_file.read())
+                    _p['_filename'] = _pdf_file.name
+                    _all_parsed.append(_p)
+                _prog.progress(1.0, text="✅ Procesados")
+                st.session_state['_dsp_pdf_key']    = _pdf_key
+                st.session_state['_dsp_all_parsed'] = _all_parsed
 
-                if not parsed['ok']:
-                    st.error(f"❌ No se pudo procesar: {', '.join(parsed['errors'])}")
-                    continue
+            _all_parsed = st.session_state.get('_dsp_all_parsed', [])
+            _tier_color = {'Fantastic': '🟢', 'Great': '🔵', 'Fair': '🟡', 'Poor': '🔴'}
+            _ok_parsed  = [p for p in _all_parsed if p['ok']]
+            _err_parsed = [p for p in _all_parsed if not p['ok']]
 
-                meta    = parsed['meta']
-                station = parsed['station']
-                centro  = meta['centro']
-                semana  = meta['semana']
-                year    = meta.get('year', '')
-                semana_label = f"{semana}/{year}" if year else semana
+            # ── PASO 2: Resumen compacto ──────────────────────────────────
+            if _err_parsed:
+                for _p in _err_parsed:
+                    st.error(f"❌ **{_p['_filename']}** — {', '.join(_p['errors'])}")
 
-                tier_color = {'Fantastic': '🟢', 'Great': '🔵', 'Fair': '🟡', 'Poor': '🔴'}
-                overall_icon = tier_color.get(station.get('overall_standing', ''), '⚪')
+            if _ok_parsed:
+                # Tabla resumen rápida
+                _summary_rows = []
+                for _p in _ok_parsed:
+                    _m = _p['meta']
+                    _s = _p['station']
+                    _icon = _tier_color.get(_s.get('overall_standing', ''), '⚪')
+                    _summary_rows.append({
+                        'Centro':    _m['centro'],
+                        'Semana':    f"{_m['semana']}/{_m.get('year', '')}",
+                        'Score':     _s.get('overall_score', '—'),
+                        'Standing':  f"{_icon} {_s.get('overall_standing', '—')}",
+                        'Rank':      f"#{_s.get('rank_station', '—')}",
+                        'Drivers':   len(_p['drivers']) if not _p['drivers'].empty else 0,
+                        'WHC':       len(_p['wh']) if not _p['wh'].empty else 0,
+                        'Avisos':    len(_p['errors']),
+                    })
+                st.dataframe(
+                    pd.DataFrame(_summary_rows),
+                    use_container_width=True, hide_index=True
+                )
 
-                with st.expander(
-                    f"{overall_icon} {centro} — {semana_label} | Score: {station.get('overall_score')} "
-                    f"({station.get('overall_standing')}) | Rank: #{station.get('rank_station')}",
-                    expanded=True
-                ):
-                    c1, c2, c3, c4 = st.columns(4)
-                    rank_wow = station.get('rank_wow')
-                    c1.metric("Overall Score", station.get('overall_score'), station.get('overall_standing'))
-                    c2.metric("Ranking Estación", f"#{station.get('rank_station')}",
-                              f"{rank_wow:+d} WoW" if rank_wow is not None else None)
-                    c3.metric(f"WHC {tier_color.get(station.get('whc_tier',''),'⚪')}",
-                              f"{station.get('whc_pct')}%", station.get('whc_tier'))
-                    c4.metric(f"LoR DPMO {tier_color.get(station.get('lor_tier',''),'⚪')}",
-                              station.get('lor_dpmo'), station.get('lor_tier'))
+                # ── PASO 3: BOTÓN ÚNICO "GUARDAR TODOS" ──────────────────
+                _btn_label = (
+                    f"💾 Guardar {len(_ok_parsed)} PDF{'s' if len(_ok_parsed) > 1 else ''}"
+                    f" — {', '.join(p['meta']['centro']+' '+p['meta']['semana'] for p in _ok_parsed)}"
+                )
+                if st.button(_btn_label, type="primary", use_container_width=True,
+                             key="save_all_pdfs"):
+                    _save_prog = st.progress(0, text="Guardando...")
+                    _save_results = []
+                    for _i, _p in enumerate(_ok_parsed):
+                        _m = _p['meta']
+                        _s = _p['station']
+                        _c, _w = _m['centro'], _m['semana']
+                        try:
+                            _ok_st = scorecard.save_station_scorecard(
+                                _s, _w, _c, db_config, user_data_session['name'])
+                            _n_upd, _n_miss = scorecard.update_drivers_from_pdf(
+                                _p['drivers'], _w, _c, db_config)
+                            _ok_wh = scorecard.save_wh_exceptions(
+                                _p['wh'], _w, _c, db_config, user_data_session['name'])
+                            _audit(f"Guardó PDF DSP {_c} {_w}")
+                            _save_results.append(
+                                f"✅ **{_c} {_w}** — {_n_upd} drivers · "
+                                f"{'✅' if _ok_wh else '⚠️'} WHC"
+                            )
+                        except Exception as _e:
+                            _save_results.append(f"❌ **{_c} {_w}** — Error: {_e}")
+                        _save_prog.progress((_i + 1) / len(_ok_parsed))
 
-                    c5, c6, c7, c8 = st.columns(4)
-                    c5.metric(f"DCR {tier_color.get(station.get('dcr_tier',''),'⚪')}",
-                              f"{station.get('dcr_pct')}%", station.get('dcr_tier'))
-                    c6.metric(f"DNR DPMO {tier_color.get(station.get('dnr_tier',''),'⚪')}",
-                              station.get('dnr_dpmo'), station.get('dnr_tier'))
-                    c7.metric(f"FICO {tier_color.get(station.get('fico_tier',''),'⚪')}",
-                              station.get('fico'), station.get('fico_tier'))
-                    c8.metric(f"POD {tier_color.get(station.get('pod_tier',''),'⚪')}",
-                              f"{station.get('pod_pct')}%", station.get('pod_tier'))
+                    # Limpiar cachés una sola vez al final
+                    _clear_all_caches()
+                    # Limpiar estado para no re-guardar accidentalmente
+                    st.session_state.pop('_dsp_pdf_key', None)
+                    st.session_state.pop('_dsp_all_parsed', None)
 
-                    fa1 = station.get('focus_area_1') or '—'
-                    fa2 = station.get('focus_area_2') or '—'
-                    fa3 = station.get('focus_area_3') or '—'
-                    st.info(f"🎯 **Focus Areas Amazon:** 1. {fa1} · 2. {fa2} · 3. {fa3}")
+                    st.success("**Resultado del guardado:**\n\n" + "\n\n".join(_save_results))
 
-                    n_drivers = len(parsed['drivers']) if not parsed['drivers'].empty else 0
-                    n_wh      = len(parsed['wh']) if not parsed['wh'].empty else 0
-                    st.caption(f"📊 {n_drivers} conductores extraídos · ⏰ {n_wh} excepciones WHC")
+                # ── PASO 4: Detalle por PDF (cerrado por defecto) ─────────
+                st.markdown("---")
+                st.caption("🔍 Detalle por PDF — haz clic para expandir")
+                for _p in _ok_parsed:
+                    _m = _p['meta']
+                    _s = _p['station']
+                    _icon = _tier_color.get(_s.get('overall_standing', ''), '⚪')
+                    _exp_title = (
+                        f"{_icon} {_m['centro']} — {_m['semana']}/{_m.get('year','')} · "
+                        f"Score {_s.get('overall_score')} ({_s.get('overall_standing')}) · "
+                        f"Rank #{_s.get('rank_station')}"
+                    )
+                    with st.expander(_exp_title, expanded=False):
+                        _c1, _c2, _c3, _c4 = st.columns(4)
+                        _rw = _s.get('rank_wow')
+                        _c1.metric("Overall Score", _s.get('overall_score'), _s.get('overall_standing'))
+                        _c2.metric("Ranking", f"#{_s.get('rank_station')}",
+                                   f"{_rw:+d} WoW" if _rw is not None else None)
+                        _c3.metric(f"WHC {_tier_color.get(_s.get('whc_tier',''),'⚪')}",
+                                   f"{_s.get('whc_pct')}%", _s.get('whc_tier'))
+                        _c4.metric(f"LoR DPMO {_tier_color.get(_s.get('lor_tier',''),'⚪')}",
+                                   _s.get('lor_dpmo'), _s.get('lor_tier'))
 
-                    if parsed['errors']:
-                        st.warning(f"⚠️ Campos no encontrados: {', '.join(parsed['errors'])}")
+                        _c5, _c6, _c7, _c8 = st.columns(4)
+                        _c5.metric(f"DCR {_tier_color.get(_s.get('dcr_tier',''),'⚪')}",
+                                   f"{_s.get('dcr_pct')}%", _s.get('dcr_tier'))
+                        _c6.metric(f"DNR DPMO {_tier_color.get(_s.get('dnr_tier',''),'⚪')}",
+                                   _s.get('dnr_dpmo'), _s.get('dnr_tier'))
+                        _c7.metric(f"FICO {_tier_color.get(_s.get('fico_tier',''),'⚪')}",
+                                   _s.get('fico'), _s.get('fico_tier'))
+                        _c8.metric(f"POD {_tier_color.get(_s.get('pod_tier',''),'⚪')}",
+                                   f"{_s.get('pod_pct')}%", _s.get('pod_tier'))
 
-                    if st.button(f"💾 Guardar {centro} {semana}", key=f"save_dsp_{centro}_{semana}",
-                                 type="primary", use_container_width=True):
-                        with st.spinner("Guardando..."):
-                            try:
-                                ok_station = scorecard.save_station_scorecard(
-                                    station, semana, centro, db_config,
-                                    user_data_session['name']
-                                )
-                                n_upd, n_miss = scorecard.update_drivers_from_pdf(
-                                    parsed['drivers'], semana, centro, db_config
-                                )
-                                ok_wh = scorecard.save_wh_exceptions(
-                                    parsed['wh'], semana, centro, db_config,
-                                    user_data_session['name']
-                                )
-                                _clear_all_caches()
-                                _audit(f"Guardó PDF DSP {centro} {semana}")
-                                if ok_station:
-                                    st.success(
-                                        f"✅ Guardado — Drivers actualizados: {n_upd} · "
-                                        f"Sin match: {n_miss} · WHC: {'✅' if ok_wh else '❌'}"
-                                    )
-                                else:
-                                    st.error("❌ Error guardando scorecard de estación.")
-                            except Exception as e:
-                                st.error(f"❌ Error: {e}")
+                        _fa1 = _s.get('focus_area_1') or '—'
+                        _fa2 = _s.get('focus_area_2') or '—'
+                        _fa3 = _s.get('focus_area_3') or '—'
+                        st.info(f"🎯 **Focus Areas Amazon:** 1. {_fa1} · 2. {_fa2} · 3. {_fa3}")
+
+                        _nd = len(_p['drivers']) if not _p['drivers'].empty else 0
+                        _nw = len(_p['wh']) if not _p['wh'].empty else 0
+                        st.caption(f"📊 {_nd} conductores · ⏰ {_nw} excepciones WHC")
+                        if _p['errors']:
+                            st.warning(f"⚠️ Campos no encontrados: {', '.join(_p['errors'])}")
 
         st.divider()
         st.subheader("📊 Histórico DSP Scorecard por Estación")
@@ -1273,11 +1749,34 @@ if tab_dsp:
                 df_filtrado  = df_ss[df_ss['centro'].isin(sel_centros)] if sel_centros else df_ss
                 cols_show = [c for c in [
                     'semana', 'centro', 'overall_score', 'overall_standing', 'rank_station', 'rank_wow',
+                    'wh_count', 'whc_pct', 'whc_tier',
                     'dcr_pct', 'dcr_tier', 'dnr_dpmo', 'dnr_tier', 'lor_dpmo', 'lor_tier',
-                    'whc_pct', 'whc_tier', 'pod_pct', 'pod_tier', 'fico', 'fico_tier',
+                    'pod_pct', 'pod_tier', 'fico', 'fico_tier',
                     'focus_area_1', 'focus_area_2', 'focus_area_3'
                 ] if c in df_filtrado.columns]
-                st.dataframe(df_filtrado[cols_show], use_container_width=True, hide_index=True, height=400)
+                st.dataframe(
+                    df_filtrado[cols_show],
+                    use_container_width=True,
+                    hide_index=True,
+                    height=400,
+                    column_config={
+                        'semana':           st.column_config.TextColumn('Semana', width='small'),
+                        'centro':           st.column_config.TextColumn('Centro', width='small'),
+                        'overall_score':    st.column_config.NumberColumn('Score', format='%.2f', width='small'),
+                        'overall_standing': st.column_config.TextColumn('Standing', width='small'),
+                        'rank_station':     st.column_config.NumberColumn('Rank', width='small'),
+                        'rank_wow':         st.column_config.NumberColumn('WoW', width='small'),
+                        'wh_count':         st.column_config.NumberColumn('WHC Drivers', width='small'),
+                        'whc_pct':          st.column_config.NumberColumn('WHC %', format='%.2f%%', width='small'),
+                        'whc_tier':         st.column_config.TextColumn('WHC Tier', width='small'),
+                        'dcr_pct':          st.column_config.NumberColumn('DCR %', format='%.2f%%', width='small'),
+                        'dcr_tier':         st.column_config.TextColumn('DCR Tier', width='small'),
+                        'dnr_dpmo':         st.column_config.NumberColumn('DNR DPMO', format='%.0f', width='small'),
+                        'lor_dpmo':         st.column_config.NumberColumn('LoR DPMO', format='%.0f', width='small'),
+                        'pod_pct':          st.column_config.NumberColumn('POD %', format='%.2f%%', width='small'),
+                        'fico':             st.column_config.NumberColumn('FICO', format='%.0f', width='small'),
+                    }
+                )
         except Exception as e:
             st.error(f"❌ Error: {e}")
 
@@ -1290,10 +1789,19 @@ with tab_excel:
 
     try:
         # Semanas visibles según rol
-        # JTs: solo las 2 más recientes por timestamp de subida
+        # JTs: solo las 2 más recientes por timestamp de subida + filtro por centro asignado
         # Admins: todas
+        # Semanas visibles según rol:
+        # - JT: sus 2 semanas permitidas
+        # - Admin: las últimas 4 semanas activas (BD conserva todo, la app solo muestra las más recientes)
         allowed = ALLOWED_WEEKS_JT if is_jt else None
-        df_available = cached_available_batches(_DB_KEY, db_config, allowed)
+        active_weeks = get_active_weeks(_DB_KEY, db_config) if not is_jt else None
+        df_available = cached_available_batches(_DB_KEY, db_config, allowed,
+                                                active_weeks_only=active_weeks)
+
+        # Si el JT tiene centro asignado, filtrar también por centro
+        if is_jt and JT_CENTRO and not df_available.empty:
+            df_available = df_available[df_available['centro'] == JT_CENTRO]
 
         if df_available.empty:
             st.info("📭 No hay scorecards disponibles. Procesa archivos primero.")
@@ -1326,44 +1834,26 @@ with tab_excel:
             sc_week   = st.session_state.get('sc_week',   selected_week)
             sc_center = st.session_state.get('sc_center', selected_center)
 
-            # Si el selector cambió respecto al session_state, sincronizar inmediatamente.
-            # Sin esto, el scorecard visible y el selector mostrado quedaban desincronizados.
+            # Si cambia selector, refrescar Y resetear filtros activos
             if sc_week != selected_week or sc_center != selected_center:
                 sc_week   = selected_week
                 sc_center = selected_center
-                st.session_state['sc_week']   = selected_week
-                st.session_state['sc_center'] = selected_center
+                # Limpiar filtros de calificación para que no queden "atascados"
+                for _fk in ['cal_filter', 'calificacion_filter', 'filter_cal', 'sc_cal_filter']:
+                    st.session_state.pop(_fk, None)
 
             df_sc = cached_scorecard(_DB_KEY, db_config, sc_week, sc_center)
 
             if df_sc.empty:
                 st.warning("No se encontraron datos para este scorecard.")
             else:
-                # ── Buscar semana anterior para deltas WoW ────────────────
-                # Ordenamos por MAX(timestamp) DESC, no por nombre de semana.
-                # Esto evita el bug con comparación lexicográfica "W9" > "W10".
-                # La semana anterior = la segunda semana más reciente en BD para este centro.
-                conn_w = None
-                try:
-                    conn_w = scorecard.get_db_connection(db_config)
-                    p = "%s" if db_config['type'] == 'postgresql' else "?"
-                    df_prev_meta = pd.read_sql_query(
-                        f"SELECT semana, MAX(timestamp) AS t FROM scorecards "
-                        f"WHERE centro = {p} AND semana != {p} "
-                        f"GROUP BY semana ORDER BY t DESC LIMIT 1",
-                        conn_w, params=(sc_center, sc_week)
-                    )
-                    prev_week = df_prev_meta['semana'].iloc[0] if not df_prev_meta.empty else None
-                    df_prev = cached_scorecard(_DB_KEY, db_config, prev_week, sc_center) if prev_week else pd.DataFrame()
-                except Exception:
-                    prev_week = None
-                    df_prev = pd.DataFrame()
-                finally:
-                    if conn_w is not None:
-                        try:
-                            conn_w.close()
-                        except Exception:
-                            pass
+                # ── Semana anterior para deltas WoW (caché 5 min) ──
+                df_prev = cached_prev_week(_DB_KEY, db_config, sc_center, sc_week)
+                prev_week = (
+                    df_prev['semana'].iloc[0]
+                    if not df_prev.empty and 'semana' in df_prev.columns else None
+                )
+
 
                 # ── KPIs resumen + delta WoW ──────────────────────────────
                 total   = len(df_sc)
@@ -1376,6 +1866,11 @@ with tab_excel:
                 n_fair      = (df_sc['calificacion'] == '⚠️ FAIR').sum()
                 n_poor      = (df_sc['calificacion'] == '🛑 POOR').sum()
                 pct_top2    = round((n_fantastic + n_great) / total * 100, 1) if total else 0
+
+                # Cobertura PDF oficial
+                n_pdf_loaded = int(df_sc['pdf_loaded'].fillna(0).astype(int).sum()) if 'pdf_loaded' in df_sc.columns else 0
+                pct_pdf      = round(n_pdf_loaded / total * 100, 0) if total else 0
+                pdf_color    = "#198754" if pct_pdf == 100 else ("#fd7e14" if pct_pdf > 0 else "#6c757d")
 
                 # Deltas WoW
                 prev_sc_mean  = df_prev['score'].mean() if not df_prev.empty else None
@@ -1397,8 +1892,14 @@ with tab_excel:
                             <div style='opacity:0.7;font-size:0.9em'>{sc_week}
                             {"· vs " + prev_week if prev_week else ""}</div>
                         </div>
-                        <div style='text-align:right;font-size:0.85em;opacity:0.7'>
-                            {total} conductores
+                        <div style='text-align:right;font-size:0.85em'>
+                            <div style='opacity:0.7'>{total} conductores</div>
+                            <div style='margin-top:4px'>
+                                <span style='background:{pdf_color};color:white;padding:2px 8px;
+                                border-radius:10px;font-size:0.9em;font-weight:700'>
+                                📄 PDF: {n_pdf_loaded}/{total} ({int(pct_pdf)}%)
+                                </span>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1424,8 +1925,8 @@ with tab_excel:
                 st.subheader("🏆 Distribución de la Flota")
                 d1, d2, d3, d4 = st.columns(4)
                 for col, cal, n, color in [
-                    (d1, 'FANTASTIC', n_fantastic, '#198754'),
-                    (d2, 'GREAT',     n_great,     '#0d6efd'),
+                    (d1, 'FANTASTIC', n_fantastic, '#0d6efd'),
+                    (d2, 'GREAT',     n_great,     '#198754'),
                     (d3, 'FAIR',      n_fair,       '#fd7e14'),
                     (d4, 'POOR',      n_poor,       '#dc3545'),
                 ]:
@@ -1441,201 +1942,337 @@ with tab_excel:
 
                 st.markdown("---")
 
-                # ── ALERTA: Conductores POOR ──────────────────────────────
-                df_poor = df_sc[df_sc['calificacion'] == '🛑 POOR'].sort_values('score')
-                if not df_poor.empty:
-                    st.markdown(clean_html(f"""
-                    <div style='background:#dc354515;border-left:4px solid #dc3545;
-                                border-radius:6px;padding:0.8rem 1rem;margin-bottom:0.5rem'>
-                        <b style='color:#dc3545'>🚨 {len(df_poor)} conductor{'es' if len(df_poor)>1 else ''} 
-                        con calificación POOR — Requieren acción inmediata</b>
-                    </div>
-                    """), unsafe_allow_html=True)
+                # ══════════════════════════════════════════════════════════════
+                # LISTA DE CONDUCTORES — Expander individual por DA
+                # POOR/FAIR: abierto por defecto | GREAT/FANTASTIC: cerrado
+                # ══════════════════════════════════════════════════════════════
 
-                    for _, row in df_poor.iterrows():
-                        with st.expander(
-                            f"🛑 {row['driver_name']} — Score: {int(row['score'])} | "
-                            f"DNR: {int(row['dnr'])} | DCR: {row['dcr']*100:.1f}%"
-                        ):
-                            col_a, col_b, col_c, col_d = st.columns(4)
-                            col_a.metric("Score",  int(row['score']))
-                            col_b.metric("DNR",    int(row['dnr']))
-                            col_c.metric("DCR",    f"{row['dcr']*100:.2f}%")
-                            col_d.metric("POD",    f"{row['pod']*100:.2f}%")
+                # ── Pre-cargar tendencia batch (caché 5 min) ──
+                _df_trend_batch = cached_trend_batch(_DB_KEY, db_config, sc_center, TREND_WEEKS_BATCH)
 
-                            st.markdown("**Problemas detectados:**")
-                            st.markdown(render_detalles(row.get('detalles','')), unsafe_allow_html=True)
+                # Pre-computar HTML de tendencia — O(n) una vez fuera del loop de conductores
+                _mini_trend_map: dict = {}
+                if not _df_trend_batch.empty:
+                    for _tid in _df_trend_batch['driver_id'].unique():
+                        _mini_trend_map[str(_tid)] = _get_mini_trend(str(_tid), _df_trend_batch)
 
-                            # Coaching automático basado en el issue principal
-                            detalles_str = str(row.get('detalles', ''))
-                            tips = []
-                            if 'DNR' in detalles_str or '🚨' in detalles_str:
-                                tips.append("📌 **DNR:** Revisar rutas de difícil acceso. Llamar al cliente antes de intentar entrega. Documentar cualquier intento fallido.")
-                            if 'DCR' in detalles_str or '📦' in detalles_str:
-                                tips.append("📌 **DCR:** Auditar intentos fallidos. Verificar uso correcto de estados en la app (no marcar como entregado sin entregar).")
-                            if 'POD' in detalles_str or '📸' in detalles_str:
-                                tips.append("📌 **POD:** Foto obligatoria en CADA entrega. Asegurar que la foto sea visible y no ambigua.")
-                            if 'FS' in detalles_str or '❌' in detalles_str or '⚠️' in detalles_str:
-                                tips.append("📌 **False Scans:** No escanear en la furgoneta. Escanear solo en el punto exacto de entrega.")
-                            if 'CC' in detalles_str or '📞' in detalles_str:
-                                tips.append("📌 **Customer Contact:** Contactar al cliente cuando el acceso sea difícil. Registrar el intento de contacto.")
-                            if 'RTS' in detalles_str or '🔄' in detalles_str:
-                                tips.append("📌 **RTS Alto:** Reducir devoluciones al almacén. Verificar direcciones antes de salir y usar todas las opciones de entrega.")
-                            if tips:
-                                st.info("\n\n".join(tips))
+                # ── WoW delta por conductor (ya tenemos df_prev cargado) ───────
+                wow_map = (
+                    df_prev.set_index('driver_id')['score'].to_dict()
+                    if not df_prev.empty and 'driver_id' in df_prev.columns
+                    else {}
+                )
 
-                    st.markdown("---")
+                # ── Ordenar: POOR primero, luego FAIR, GREAT, FANTASTIC ────────
+                _order = {'🛑 POOR': 0, '⚠️ FAIR': 1, '🥇 GREAT': 2, '💎 FANTASTIC': 3}
+                df_all_sorted = df_sc.copy()
+                df_all_sorted['_sort_cal'] = df_all_sorted['calificacion'].map(_order).fillna(4)
+                df_all_sorted = df_all_sorted.sort_values(['_sort_cal', 'score']).reset_index(drop=True)
 
-                # ── AVISO: Conductores FAIR ───────────────────────────────
-                df_fair = df_sc[df_sc['calificacion'] == '⚠️ FAIR'].sort_values('score')
-                if not df_fair.empty:
-                    with st.expander(f"⚠️ {len(df_fair)} conductores en FAIR — Necesitan mejora"):
-                        for _, row in df_fair.iterrows():
-                            cols = st.columns([3, 1, 1, 1, 4])
-                            cols[0].markdown(f"**{row['driver_name']}**")
-                            cols[1].markdown(f"Score: **{int(row['score'])}**")
-                            cols[2].markdown(f"DNR: **{int(row['dnr'])}**")
-                            cols[3].markdown(f"DCR: **{row['dcr']*100:.1f}%**")
-                            cols[4].markdown(
-                                render_detalles(row.get('detalles','')),
+                # ── Filtro por calificación — st.radio horizontal (sin rerun) ──
+                n_poor      = int((df_sc['calificacion'] == '🛑 POOR').sum())
+                n_fair      = int((df_sc['calificacion'] == '⚠️ FAIR').sum())
+                n_great     = int((df_sc['calificacion'] == '🥇 GREAT').sum())
+                n_fantastic = int((df_sc['calificacion'] == '💎 FANTASTIC').sum())
+
+                _radio_opts = [
+                    f"Todos ({len(df_sc)})",
+                    f"🛑 POOR ({n_poor})",
+                    f"⚠️ FAIR ({n_fair})",
+                    f"🥇 GREAT ({n_great})",
+                    f"💎 FANTASTIC ({n_fantastic})",
+                ]
+                _radio_key = f"radio_filter_{sc_center}_{sc_week}"
+                _radio_sel = st.radio(
+                    "Filtrar:", _radio_opts, index=0,
+                    horizontal=True, label_visibility="collapsed",
+                    key=_radio_key
+                )
+
+                # Mapear selección a valor de calificación (None = todos)
+                _cal_map = {
+                    _radio_opts[0]: None,
+                    _radio_opts[1]: '🛑 POOR',
+                    _radio_opts[2]: '⚠️ FAIR',
+                    _radio_opts[3]: '🥇 GREAT',
+                    _radio_opts[4]: '💎 FANTASTIC',
+                }
+                _cal_activo = _cal_map.get(_radio_sel)
+
+                if _cal_activo:
+                    df_visible = df_all_sorted[df_all_sorted['calificacion'] == _cal_activo].copy()
+                else:
+                    df_visible = df_all_sorted
+
+                # ── Paginación ─────────────────────────────────────────────────
+                # Usar radio key como base — al cambiar filtro, resetear página
+                _pk = f"page_{sc_center}_{sc_week}"
+                _prev_filter_key = f"prev_filter_{sc_center}_{sc_week}"
+                if (st.session_state.get(_prev_filter_key) != _cal_activo
+                        or _pk not in st.session_state):
+                    st.session_state[_pk] = 0
+                st.session_state[_prev_filter_key] = _cal_activo
+
+                _total_visible = len(df_visible)
+                _n_pages = max(1, (_total_visible + DRIVERS_PER_PAGE - 1) // DRIVERS_PER_PAGE)
+                _page = min(st.session_state[_pk], _n_pages - 1)
+                st.session_state[_pk] = _page
+
+                _start = _page * DRIVERS_PER_PAGE
+                _end   = _start + DRIVERS_PER_PAGE
+                df_page = df_visible.iloc[_start:_end]
+
+                _pag_info = f"Página {_page + 1}/{_n_pages} · {_total_visible} conductores"
+                if _cal_activo:
+                    _pag_info += f" · {_cal_activo} — pulsa de nuevo para ver todos"
+                else:
+                    _pag_info += " · pulsa una categoría para filtrar"
+                st.caption(_pag_info)
+
+                if _n_pages > 1:
+                    _render_pagination(
+                        _pk, _page, _n_pages, _total_visible, DRIVERS_PER_PAGE,
+                        prev_key=f'prev_{sc_center}_{sc_week}',
+                        next_key=f'next_{sc_center}_{sc_week}',
+                    )
+
+
+                # ── Loop por conductor ─────────────────────────────────────────
+                # ── _metric_row helper (definido fuera del loop) ─────────
+                # Targets cacheados UNA VEZ fuera del loop (antes: 1 llamada por conductor)
+                _t = cached_center_targets(_DB_KEY, db_config, sc_center)
+
+                for _, row in df_page.iterrows():
+                    cal       = str(row['calificacion'])
+                    cal_color = CALIFICACION_COLORS.get(cal, '#6c757d')
+                    is_poor   = cal == '🛑 POOR'
+                    is_fair   = cal == '⚠️ FAIR'
+                    is_great  = cal == '🥇 GREAT'
+                    is_fantas = cal == '💎 FANTASTIC'
+                    prev_score = wow_map.get(row['driver_id'])
+                    wow_str    = ""
+                    if prev_score is not None:
+                        delta_s = row['score'] - prev_score
+                        wow_icon = '▲' if delta_s > 0 else ('▼' if delta_s < 0 else '→')
+                        wow_col  = '#198754' if delta_s >= 0 else '#dc3545'
+                        wow_str  = f" <span style='color:{wow_col};font-size:0.85em'>{wow_icon}{delta_s:+.0f}</span>"
+
+                    # Mini-tendencia
+                    mini_trend = _mini_trend_map.get(str(row['driver_id']), '')
+
+                    # Label del expander
+                    exp_label = (
+                        f"{cal.split(' ')[0]} {row['driver_name']}  ·  "
+                        f"Score: {int(row['score'])}"
+                        + (f" ({delta_s:+.0f} WoW)" if prev_score is not None else "")
+                        + f"  ·  DNR: {int(row['dnr'])}  ·  DCR: {row['dcr']*100:.1f}%"
+                    )
+
+                    # POOR y FAIR abren por defecto; GREAT y FANTASTIC cerrados
+                    with st.expander(exp_label, expanded=(is_poor or is_fair)):
+
+                        # ── Cabecera: badge calificación + tendencia ───────────
+                        _esc_name = _html.escape(str(row['driver_name']))
+                        _esc_id   = _html.escape(str(row['driver_id']))
+                        head_col1, head_col2 = st.columns([2, 3])
+                        with head_col1:
+                            st.markdown(
+                                clean_html(f"""
+                                <div style='background:{cal_color}15;border-left:4px solid {cal_color};
+                                            border-radius:6px;padding:8px 12px;margin-bottom:4px'>
+                                    <span style='font-size:1.1em;font-weight:800;color:{cal_color}'>{cal}</span>
+                                    &nbsp;&nbsp;
+                                    <span style='font-weight:700;color:#212529'>{_esc_name}</span>
+                                    <br>
+                                    <span style='font-size:0.82em;color:#6c757d'>ID: {_esc_id}</span>
+                                </div>
+                                """),
                                 unsafe_allow_html=True
                             )
+                        with head_col2:
+                            if mini_trend:
+                                st.markdown(
+                                    f"<div style='padding-top:6px'>"
+                                    f"<span style='font-size:0.8em;color:#6c757d;font-weight:600'>Últimas semanas: </span>"
+                                    f"{mini_trend}</div>",
+                                    unsafe_allow_html=True
+                                )
 
-                    st.markdown("---")
+                        st.markdown("---")
 
-                # ── LISTADO: Conductores FANTASTIC y GREAT ──────────────────
-                df_fantastic = df_sc[df_sc['calificacion'] == '💎 FANTASTIC'].sort_values('score', ascending=False)
-                df_great = df_sc[df_sc['calificacion'] == '🥇 GREAT'].sort_values('score', ascending=False)
+                        # ── Bloque principal: CSV vs PDF ───────────────────────
+                        has_pdf = int(row.get('pdf_loaded', 0) or 0) == 1
 
-                if not df_fantastic.empty or not df_great.empty:
-                    with st.expander(f"⭐ {len(df_fantastic)} Fantastic | {len(df_great)} Great — Ver listado"):
-                        if not df_fantastic.empty:
-                            st.markdown("**💎 FANTASTIC**")
-                            for _, row in df_fantastic.iterrows():
-                                cols = st.columns([3, 1, 1, 1, 4])
-                                cols[0].markdown(f"**{row['driver_name']}**")
-                                cols[1].markdown(f"Score: **{int(row['score'])}**")
-                                cols[2].markdown(f"DNR: **{int(row['dnr'])}**")
-                                cols[3].markdown(f"DCR: **{row['dcr']*100:.1f}%**")
-                                cols[4].markdown(render_detalles(row.get('detalles','')), unsafe_allow_html=True)
-                        if not df_great.empty:
-                            if not df_fantastic.empty: st.divider()
-                            st.markdown("**🥇 GREAT**")
-                            for _, row in df_great.iterrows():
-                                cols = st.columns([3, 1, 1, 1, 4])
-                                cols[0].markdown(f"**{row['driver_name']}**")
-                                cols[1].markdown(f"Score: **{int(row['score'])}**")
-                                cols[2].markdown(f"DNR: **{int(row['dnr'])}**")
-                                cols[3].markdown(f"DCR: **{row['dcr']*100:.1f}%**")
-                                cols[4].markdown(render_detalles(row.get('detalles','')), unsafe_allow_html=True)
-                    st.markdown("---")
+                        _cols = st.columns([3, 2]) if has_pdf else st.columns([1])
+                        col_csv = _cols[0]
+                        col_pdf = _cols[1] if has_pdf else None
 
-                # ── Ranking de mejora WoW ─────────────────────────────────
-                if not df_prev.empty and 'driver_id' in df_prev.columns:
-                    df_merged_wow = df_sc[['driver_id', 'driver_name', 'score']].merge(
-                        df_prev[['driver_id', 'score']].rename(columns={'score': 'score_prev'}),
-                        on='driver_id', how='inner'
-                    )
-                    df_merged_wow['delta'] = df_merged_wow['score'] - df_merged_wow['score_prev']
-                    top_mejora = df_merged_wow.nlargest(5, 'delta')
-                    top_bajada = df_merged_wow.nsmallest(5, 'delta')
+                        with col_csv:
+                            st.markdown(
+                                "<div style='font-weight:700;color:#adb5bd;margin-bottom:8px'>"
+                                "📂 Informes Semanales (CSVs)</div>",
+                                unsafe_allow_html=True
+                            )
+                            # Obtener targets del centro para mostrar vs objetivo
 
-                    with st.expander(f"📈 Ranking WoW — {sc_week} vs {prev_week}"):
-                        col_m, col_b = st.columns(2)
-                        with col_m:
-                            st.markdown("**🚀 Más mejorados**")
-                            for _, r in top_mejora.iterrows():
-                                if r['delta'] > 0:
+                            _rows = (
+                                _metric_row("Entregas", row.get('entregados'), None, is_int=True, is_pct=False) +
+                                _metric_row("DNR", row.get('dnr'), _t.get('target_dnr', 0.5),
+                                            higher_is_better=False, is_pct=False, is_int=True) +
+                                _metric_row("False Scans", row.get('fs_count'), 5,
+                                            higher_is_better=False, is_pct=False, is_int=True) +
+                                _metric_row("DCR", row.get('dcr'), _t.get('target_dcr', 0.995)) +
+                                _metric_row("POD", row.get('pod'), _t.get('target_pod', 0.99)) +
+                                _metric_row("CC",  row.get('cc'),  _t.get('target_cc', 0.99)) +
+                                _metric_row("FDPS", row.get('fdps'), _t.get('target_fdps', 0.9)) +
+                                _metric_row("RTS", row.get('rts'), _t.get('target_rts', 0.03),
+                                            higher_is_better=False) +
+                                _metric_row("CDF", row.get('cdf'), _t.get('target_cdf', 0.9))
+                            )
+                            st.markdown(clean_html(f"""
+<table style='width:100%;border-collapse:collapse;background:#1a1f2e;
+              border-radius:8px;overflow:hidden;border:1px solid #2d3748'>
+<tbody>{_rows}</tbody>
+</table>
+"""), unsafe_allow_html=True)
+
+                        if col_pdf is not None:
+                            with col_pdf:
+                                st.markdown(
+                                    "<div style='font-weight:700;color:#ffc107;margin-bottom:6px'>"
+                                    "🏆 Scorecard Oficial Amazon (PDF)</div>",
+                                    unsafe_allow_html=True
+                                )
+                                if has_pdf:
+                                    pdf_rows = [
+                                        ("Entregas",         _fmt_num(row.get('entregados_oficial')),
+                                         _diff_badge(row.get('entregados'), row.get('entregados_oficial'), is_pct=False)
+                                         if row.get('entregados') else ""),
+                                        ("DCR oficial",      _fmt_pct(row.get('dcr_oficial')),
+                                         _diff_badge(row.get('dcr'), row.get('dcr_oficial')) if row.get('dcr') else ""),
+                                        ("POD oficial",      _fmt_pct(row.get('pod_oficial')),
+                                         _diff_badge(row.get('pod'), row.get('pod_oficial')) if row.get('pod') else ""),
+                                        ("CC oficial",       _fmt_pct(row.get('cc_oficial')),
+                                         _diff_badge(row.get('cc'), row.get('cc_oficial')) if row.get('cc') else ""),
+                                        ("CDF DPMO",         _fmt_num(row.get('cdf_dpmo_oficial')),     ""),
+                                        ("LOR DPMO",         _fmt_num(row.get('lor_dpmo')),             ""),
+                                        ("DSC DPMO",         _fmt_num(row.get('dsc_dpmo')),             ""),
+                                    ]
+                                    pdf_html_rows = ""
+                                    for label, val, diff in pdf_rows:
+                                        pdf_html_rows += (
+                                            f"<tr>"
+                                            f"<td style='padding:5px 8px;color:#6c757d;font-size:0.85em;font-weight:600'>{label}</td>"
+                                            f"<td style='padding:5px 8px;font-weight:700;text-align:right'>{val}</td>"
+                                            f"<td style='padding:5px 8px;font-size:0.8em;text-align:right'>{diff}</td>"
+                                            f"</tr>"
+                                        )
+                                    st.markdown(clean_html(f"""
+                                    <table style='width:100%;border-collapse:collapse;
+                                                  border:1px solid #198754;border-radius:6px;overflow:hidden'>
+                                        <thead>
+                                            <tr style='background:#19875415'>
+                                                <th style='padding:5px 8px;text-align:left;
+                                                           font-size:0.78em;color:#198754'>Métrica</th>
+                                                <th style='padding:5px 8px;text-align:right;
+                                                           font-size:0.78em;color:#198754'>Valor PDF</th>
+                                                <th style='padding:5px 8px;text-align:right;
+                                                           font-size:0.78em;color:#198754'>Δ CSV→PDF</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>{pdf_html_rows}</tbody>
+                                    </table>
+                                    <div style='font-size:0.75em;color:#6c757d;margin-top:4px'>
+                                        ✅ Diferencia pequeña · 🟡 Diferencia moderada · 🔴 Diferencia significativa
+                                    </div>
+                                    """), unsafe_allow_html=True)
+                                else:
                                     st.markdown(
-                                        f"▲ **+{r['delta']:.0f}pts** · {r['driver_name']} "
-                                        f"({r['score_prev']:.0f}→{r['score']:.0f})"
-                                    )
-                        with col_b:
-                            st.markdown("**⚠️ Más bajaron**")
-                            for _, r in top_bajada.iterrows():
-                                if r['delta'] < 0:
-                                    st.markdown(
-                                        f"▼ **{r['delta']:.0f}pts** · {r['driver_name']} "
-                                        f"({r['score_prev']:.0f}→{r['score']:.0f})"
+                                    "<div style='background:#f8f9fa;border:1px dashed #ced4da;"
+                                    "border-radius:6px;padding:16px;text-align:center;"
+                                    "color:#6c757d;font-size:0.88em'>"
+                                    "⬜ PDF oficial no cargado para este conductor"
+                                    "</div>",
+                                    unsafe_allow_html=True
                                     )
 
-                    st.markdown("---")
+                        # ── Penalizaciones / Reconocimiento ───────────────────
+                        st.markdown("---")
 
-                # ── Tabla completa con detalles como badges ───────────────
-                st.subheader("📋 Tabla Completa de Conductores")
+                        if is_poor or is_fair:
+                            # Problemas detectados
+                            det_str = str(row.get('detalles', ''))
+                            if det_str and det_str not in ('Óptimo', 'nan', ''):
+                                st.markdown("**🔍 Problemas detectados:**")
+                                st.markdown(render_detalles(det_str), unsafe_allow_html=True)
 
-                # Construir tabla enriquecida con HTML
-                df_display = df_sc[[
-                    'driver_name', 'driver_id', 'calificacion', 'score',
-                    'dnr', 'fs_count', 'dcr', 'pod', 'cc', 'rts', 'fdps', 'detalles'
-                ]].sort_values('score', ascending=False).copy()
+                            # Tips de coaching
+                            tips = []
+                            if 'DNR' in det_str or '🚨' in det_str:
+                                tips.append("📌 **DNR:** Revisar rutas difícil acceso. Llamar al cliente antes de intentar entrega.")
+                            if 'DCR' in det_str or '📦' in det_str:
+                                tips.append("📌 **DCR:** Auditar intentos fallidos. Verificar estados correctos en la app.")
+                            if 'POD' in det_str or '📸' in det_str:
+                                tips.append("📌 **POD:** Foto obligatoria en CADA entrega, visible y sin ambigüedad.")
+                            if 'FS' in det_str or '❌' in det_str:
+                                tips.append("📌 **False Scans:** No escanear en la furgoneta. Solo en el punto exacto de entrega.")
+                            if 'CC' in det_str or '📞' in det_str:
+                                tips.append("📌 **CC:** Contactar al cliente cuando el acceso sea difícil. Registrar el intento.")
+                            if 'RTS' in det_str or '🔄' in det_str:
+                                tips.append("📌 **RTS:** Reducir devoluciones. Verificar direcciones antes de salir.")
+                            if 'FDPS' in det_str or '🚚' in det_str:
+                                tips.append("📌 **FDPS:** Maximizar entregas en primera visita. Planificar bien la ruta.")
+                            if tips:
+                                st.info("**💬 Puntos para la conversación:**\n\n" + "\n\n".join(tips))
 
-                # Construir HTML para la tabla
-                rows_html = []
-                for _, row in df_display.iterrows():
-                    cal     = str(row['calificacion'])
-                    bg_row  = {
-                        '💎 FANTASTIC': '#f0fff4',
-                        '🥇 GREAT':     '#f0f4ff',
-                        '⚠️ FAIR':      '#fffaf0',
-                        '🛑 POOR':      '#fff5f5',
-                    }.get(cal, 'white')
+                        elif is_great or is_fantas:
+                            # Reconocimiento
+                            rec_msgs = []
+                            if is_fantas:
+                                rec_msgs.append("🏆 **Rendimiento FANTASTIC** — Está en el nivel más alto posible.")
+                                rec_msgs.append("✨ Reconocer su consistencia y compartir sus buenas prácticas con el equipo.")
+                            else:
+                                rec_msgs.append("🥇 **Rendimiento GREAT** — Por encima de los objetivos en la mayoría de métricas.")
+                                rec_msgs.append("🎯 Mencionar qué hace bien y motivarle a alcanzar FANTASTIC la próxima semana.")
 
-                    score_bar_html = render_score_bar(float(row['score']))
-                    cal_badge      = render_calificacion(cal)
-                    det_badges     = render_detalles(row.get('detalles',''))
+                            det_str = str(row.get('detalles', ''))
+                            if det_str and det_str not in ('Óptimo', 'nan', ''):
+                                rec_msgs.append(f"⚠️ **Áreas de mejora:** {det_str}")
 
-                    rows_html.append(clean_html(f"""
-                    <tr style='background:{bg_row};border-bottom:1px solid #dee2e6'>
-                        <td style='padding:6px 8px;font-weight:600'>{row['driver_name']}</td>
-                        <td style='padding:6px 8px;color:#6c757d;font-size:0.85em'>{row['driver_id']}</td>
-                        <td style='padding:6px 8px'>{cal_badge}</td>
-                        <td style='padding:6px 8px;min-width:120px'>{score_bar_html}</td>
-                        <td style='padding:6px 8px;text-align:center'><b style='color:{"#dc3545" if row["dnr"]>=2 else "#198754"}'>{int(row["dnr"])}</b></td>
-                        <td style='padding:6px 8px;text-align:center'>{row["dcr"]*100:.2f}%</td>
-                        <td style='padding:6px 8px;text-align:center'>{row["pod"]*100:.2f}%</td>
-                        <td style='padding:6px 8px;text-align:center'>{row["cc"]*100:.2f}%</td>
-                        <td style='padding:6px 8px'>{det_badges}</td>
-                    </tr>"""))
-
-                table_html = clean_html(f"""
-                <div style='overflow-x:auto;border-radius:8px;border:1px solid #dee2e6'>
-                <table style='width:100%;border-collapse:collapse;font-size:0.88em'>
-                    <thead>
-                        <tr style='background:#232f3e;color:white'>
-                            <th style='padding:8px;text-align:left'>Conductor</th>
-                            <th style='padding:8px;text-align:left'>ID</th>
-                            <th style='padding:8px;text-align:left'>Calificación</th>
-                            <th style='padding:8px;text-align:left'>Score</th>
-                            <th style='padding:8px;text-align:center'>DNR</th>
-                            <th style='padding:8px;text-align:center'>DCR</th>
-                            <th style='padding:8px;text-align:center'>POD</th>
-                            <th style='padding:8px;text-align:center'>CC</th>
-                            <th style='padding:8px;text-align:left'>Problemas</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {''.join(rows_html)}
-                    </tbody>
-                </table>
-                </div>
-                """)
-                st.markdown(table_html, unsafe_allow_html=True)
+                            st.success("\n\n".join(rec_msgs))
 
                 # ── Descarga Excel (solo admins) ──────────────────────────
                 if is_admin:
                     st.markdown("---")
                     output = io.BytesIO()
-                    df_for_excel = df_sc[[
+                    # Columnas base + oficiales del PDF cuando estén disponibles
+                    excel_cols = [
                         'driver_name', 'driver_id', 'calificacion', 'score', 'entregados',
                         'dnr', 'fs_count', 'dnr_risk_events', 'dcr', 'pod', 'cc',
-                        'fdps', 'rts', 'cdf', 'detalles'
-                    ]].copy()
-                    df_for_excel.columns = [
-                        'Nombre', 'ID', 'CALIFICACION', 'SCORE', 'Entregados',
-                        'DNR', 'FS_Count', 'DNR_RISK_EVENTS', 'DCR', 'POD', 'CC',
-                        'FDPS', 'RTS', 'CDF', 'DETALLES'
+                        'fdps', 'rts', 'cdf', 'detalles',
+                        'pdf_loaded', 'entregados_oficial', 'dcr_oficial',
+                        'pod_oficial', 'cc_oficial', 'cdf_dpmo_oficial',
+                        'dsc_dpmo', 'lor_dpmo', 'ce_dpmo',
                     ]
+                    # Incluir solo las columnas que existan en df_sc
+                    excel_cols = [c for c in excel_cols if c in df_sc.columns]
+                    df_for_excel = df_sc[excel_cols].copy()
+                    col_names = {
+                        'driver_name': 'Nombre', 'driver_id': 'ID',
+                        'calificacion': 'CALIFICACION', 'score': 'SCORE',
+                        'entregados': 'Entregados', 'dnr': 'DNR',
+                        'fs_count': 'FS_Count', 'dnr_risk_events': 'DNR_RISK_EVENTS',
+                        'dcr': 'DCR', 'pod': 'POD', 'cc': 'CC',
+                        'fdps': 'FDPS', 'rts': 'RTS', 'cdf': 'CDF', 'detalles': 'DETALLES',
+                        'pdf_loaded': 'PDF_Cargado',
+                        'entregados_oficial': 'Entregados_Oficial_PDF',
+                        'dcr_oficial': 'DCR_Oficial_PDF',
+                        'pod_oficial': 'POD_Oficial_PDF',
+                        'cc_oficial': 'CC_Oficial_PDF',
+                        'cdf_dpmo_oficial': 'CDF_DPMO_Oficial',
+                        'dsc_dpmo': 'DSC_DPMO', 'lor_dpmo': 'LOR_DPMO', 'ce_dpmo': 'CE_DPMO',
+                    }
+                    df_for_excel.rename(columns={k: v for k, v in col_names.items() if k in df_for_excel.columns}, inplace=True)
                     scorecard.create_professional_excel(
                         df_for_excel, output, center_name=sc_center, week=sc_week
                     )
@@ -1649,6 +2286,7 @@ with tab_excel:
                 else:
                     st.caption("ℹ️ Descarga disponible solo para administradores.")
 
+
                 # ── TENDENCIA POR CONDUCTOR ───────────────────────────────────
                 st.markdown("---")
                 st.subheader("📈 Evolución de un Conductor")
@@ -1656,7 +2294,7 @@ with tab_excel:
 
                 # Selector de conductor
                 driver_options = sorted(
-                    [f"{r['driver_name']} ({r['driver_id']})" for _, r in df_sc.iterrows()],
+                    (df_sc['driver_name'] + ' (' + df_sc['driver_id'] + ')').tolist(),
                     key=lambda x: x.lower()
                 )
                 selected_driver_str = st.selectbox(
@@ -1672,20 +2310,8 @@ with tab_excel:
 
                     df_trend = cached_driver_trend(_DB_KEY, db_config, sel_driver_id, sc_center)
 
-                    if df_trend.empty:
-                        st.info("ℹ️ No se encontraron datos históricos para este conductor.")
-                    elif len(df_trend) < 2:
-                        # 1 semana: mostramos los datos pero no hay tendencia que dibujar
-                        st.info(
-                            f"ℹ️ **{sel_driver_name}** solo tiene datos de 1 semana "
-                            f"({df_trend['semana'].iloc[0]}). "
-                            "Necesitas al menos 2 semanas para ver la tendencia."
-                        )
-                        st.metric(
-                            "Score actual",
-                            int(df_trend['score'].iloc[0]),
-                            help="Score de la única semana disponible"
-                        )
+                    if df_trend.empty or len(df_trend) < 1:
+                        st.info("ℹ️ Este conductor solo tiene datos de la semana actual. Necesitas al menos 2 semanas para ver tendencia.")
                     else:
                         # ── Header del conductor ──────────────────────────────
                         latest = df_trend.iloc[-1]
@@ -1706,21 +2332,35 @@ with tab_excel:
                         </div>
                         """), unsafe_allow_html=True)
 
-                        # ── Gráfico de score con zonas coloreadas ─────────────
-                        # Construir DataFrame para el gráfico
-                        df_plot = df_trend[['semana', 'score']].set_index('semana').copy()
-
-                        # Zonas de calificación como líneas de referencia
-                        semanas_list = df_trend['semana'].tolist()
-                        n_sem = len(semanas_list)
-
-                        # Añadir líneas de umbral como columnas extra para contexto visual
-                        df_plot['FANTASTIC (90)'] = 90
-                        df_plot['GREAT (80)']     = 80
-                        df_plot['FAIR (60)']      = 60
-
+                        # ── Gráfico de score histórico con zonas de referencia ──
                         st.markdown("**📊 Score histórico**")
-                        st.line_chart(df_plot, height=280, use_container_width=True)
+                        _df_plot = df_trend[['semana', 'score']].copy()
+                        _sc_min = max(0, float(_df_plot['score'].min()) - 10)
+                        _sc_max = min(100, float(_df_plot['score'].max()) + 10)
+
+                        # Línea del score real
+                        _line_score = (alt.Chart(_df_plot)
+                            .mark_line(strokeWidth=3, color='#e85d04', point=alt.OverlayMarkDef(color='#e85d04', size=60))
+                            .encode(
+                                x=alt.X('semana:N', title='Semana'),
+                                y=alt.Y('score:Q', scale=alt.Scale(domain=[_sc_min, _sc_max]), title='Score'),
+                                tooltip=[alt.Tooltip('semana:N'), alt.Tooltip('score:Q', format='.0f', title='Score')]
+                            ))
+                        # Líneas de umbral como reglas horizontales
+                        _thresholds = pd.DataFrame([
+                            {'y': 90, 'label': 'FANTASTIC', 'color': '#0d6efd'},
+                            {'y': 80, 'label': 'GREAT',     'color': '#198754'},
+                            {'y': 60, 'label': 'FAIR',      'color': '#fd7e14'},
+                        ])
+                        _lines_ref = (alt.Chart(_thresholds)
+                            .mark_rule(strokeDash=[4, 4], opacity=0.6)
+                            .encode(
+                                y=alt.Y('y:Q'),
+                                color=alt.Color('color:N', scale=None, legend=None),
+                                tooltip=[alt.Tooltip('label:N', title='Zona'), alt.Tooltip('y:Q', title='Umbral')]
+                            ))
+                        st.altair_chart((_lines_ref + _line_score).properties(height=280),
+                                        use_container_width=True)
 
                         # ── Mini métricas últimas semanas ─────────────────────
                         if len(df_trend) >= 2:
@@ -1734,8 +2374,8 @@ with tab_excel:
                             for _, dr in df_detail.iterrows():
                                 cal = str(dr['calificacion'])
                                 bg_cal = {
-                                    '💎 FANTASTIC': '#f0fff4',
-                                    '🥇 GREAT':     '#f0f4ff',
+                                    '💎 FANTASTIC': '#f0f4ff',
+                                    '🥇 GREAT':     '#f0fff4',
                                     '⚠️ FAIR':      '#fffaf0',
                                     '🛑 POOR':      '#fff5f5',
                                 }.get(cal, 'white')
@@ -1770,13 +2410,35 @@ with tab_excel:
                             </table></div>
                             """), unsafe_allow_html=True)
 
-                        # ── Tendencia de métricas secundarias ─────────────────
                         with st.expander("📊 Ver evolución de DNR / DCR / POD"):
-                            df_metrics = df_trend[['semana']].copy().set_index('semana')
-                            df_metrics['DNR']    = df_trend['dnr'].values
-                            df_metrics['DCR (%)']= (df_trend['dcr'] * 100).values.round(2)
-                            df_metrics['POD (%)']= (df_trend['pod'] * 100).values.round(2)
-                            st.line_chart(df_metrics, height=260, use_container_width=True)
+                            _df_m = df_trend[['semana','dnr','dcr','pod']].copy()
+                            _df_m['DCR (%)'] = (_df_m['dcr'] * 100).round(2)
+                            _df_m['POD (%)'] = (_df_m['pod'] * 100).round(2)
+                            # Gráfico DNR
+                            st.markdown("**DNR por semana**")
+                            _dnr_max = max(2.0, float(_df_m['dnr'].max()) * 1.4)
+                            st.altair_chart(
+                                alt.Chart(_df_m).mark_line(point=True, strokeWidth=2, color='#dc3545')
+                                .encode(x=alt.X('semana:N', title=''),
+                                        y=alt.Y('dnr:Q', scale=alt.Scale(domain=[0, _dnr_max]), title='DNR'),
+                                        tooltip=[alt.Tooltip('semana:N'), alt.Tooltip('dnr:Q', format='.0f')])
+                                .properties(height=160), use_container_width=True
+                            )
+                            # Gráfico DCR y POD juntos
+                            st.markdown("**DCR y POD (%)**")
+                            _df_pct = _df_m[['semana','DCR (%)','POD (%)']].melt('semana', var_name='Métrica', value_name='Valor')
+                            _pct_min = max(80, float(_df_pct['Valor'].min()) - 2)
+                            st.altair_chart(
+                                alt.Chart(_df_pct).mark_line(point=True, strokeWidth=2)
+                                .encode(x=alt.X('semana:N', title=''),
+                                        y=alt.Y('Valor:Q', scale=alt.Scale(domain=[_pct_min, 100.5]), title='%'),
+                                        color=alt.Color('Métrica:N', scale=alt.Scale(
+                                            domain=['DCR (%)','POD (%)'],
+                                            range=['#0d6efd','#198754'])),
+                                        tooltip=[alt.Tooltip('semana:N'), alt.Tooltip('Métrica:N'),
+                                                 alt.Tooltip('Valor:Q', format='.2f')])
+                                .properties(height=160), use_container_width=True
+                            )
 
     except Exception as e:
         st.error(f"❌ Error cargando el scorecard: {e}")
@@ -1790,9 +2452,13 @@ with tab_hist:
     st.header("📈 Histórico de Scorecards")
 
     try:
-        # JTs: solo semanas permitidas. Admins: todo.
+        # JTs: solo semanas permitidas + centro asignado si tiene. Admins: todo.
         allowed_hist = ALLOWED_WEEKS_JT if is_jt else None
         df_meta = cached_meta(_DB_KEY, db_config, allowed_hist)
+
+        # Filtrar metas por centro asignado al JT
+        if is_jt and JT_CENTRO and not df_meta.empty:
+            df_meta = df_meta[df_meta['centro'] == JT_CENTRO]
 
         if is_jt and allowed_hist:
             st.info(
@@ -1803,6 +2469,7 @@ with tab_hist:
         if df_meta.empty:
             st.info("📭 No hay datos. Procesa archivos primero.")
         else:
+            # ── Fila 1: filtros básicos ────────────────────────────────────
             col1, col2, col3 = st.columns(3)
             with col1:
                 f_center = st.multiselect("🏢 Centro", sorted(df_meta['centro'].unique()))
@@ -1812,6 +2479,61 @@ with tab_hist:
                 f_calif = st.multiselect("🏆 Calificación", df_meta['calificacion'].unique())
 
             search_term = st.text_input("🔍 Buscar conductor", placeholder="Nombre o ID...")
+
+            # ── Fila 2: filtros avanzados ──────────────────────────────────
+            with st.expander("🔬 Filtros avanzados", expanded=False):
+                fa1, fa2, fa3 = st.columns(3)
+                with fa1:
+                    # Tipo de problema — búsqueda en columna detalles
+                    PROBLEMAS_OPCIONES = {
+                        "DNR":         "DNR",
+                        "DCR bajo":    "DCR",
+                        "POD bajo":    "POD",
+                        "False Scans": "FS",
+                        "CC bajo":     "CC Bajo",
+                        "RTS alto":    "RTS",
+                        "FDPS bajo":   "FDPS",
+                        "CDF bajo":    "CDF",
+                    }
+                    f_problemas = st.multiselect(
+                        "🔍 Tipo de problema",
+                        list(PROBLEMAS_OPCIONES.keys()),
+                        help="Filtra conductores que tienen ese problema en sus detalles"
+                    )
+                with fa2:
+                    f_dnr_min = st.number_input(
+                        "⚡ DNR mínimo",
+                        min_value=0, max_value=20, value=0, step=1,
+                        help="Muestra solo conductores con DNR ≥ este valor"
+                    )
+                    f_score_max = st.number_input(
+                        "📉 Score máximo",
+                        min_value=0, max_value=100, value=100, step=5,
+                        help="Muestra solo conductores con score ≤ este valor"
+                    )
+                with fa3:
+                    f_dcr_max = st.number_input(
+                        "📦 DCR máximo (%)",
+                        min_value=80.0, max_value=100.0, value=100.0, step=0.1,
+                        format="%.1f",
+                        help="Muestra conductores con DCR ≤ este % (ej: 99.0 muestra los que tienen DCR < 99%)"
+                    )
+                    f_pod_max = st.number_input(
+                        "📸 POD máximo (%)",
+                        min_value=80.0, max_value=100.0, value=100.0, step=0.1,
+                        format="%.1f",
+                        help="Muestra conductores con POD ≤ este %"
+                    )
+
+                # Resumen de filtros activos
+                filtros_activos = []
+                if f_problemas:      filtros_activos.append(f"Problemas: {', '.join(f_problemas)}")
+                if f_dnr_min > 0:    filtros_activos.append(f"DNR ≥ {f_dnr_min}")
+                if f_score_max < 100: filtros_activos.append(f"Score ≤ {f_score_max}")
+                if f_dcr_max < 100.0: filtros_activos.append(f"DCR ≤ {f_dcr_max:.1f}%")
+                if f_pod_max < 100.0: filtros_activos.append(f"POD ≤ {f_pod_max:.1f}%")
+                if filtros_activos:
+                    st.info(f"🔬 Filtros avanzados activos: {' · '.join(filtros_activos)}")
 
             if st.button("🔍 Buscar", type="primary", use_container_width=True):
                 p = "%s" if db_config['type'] == 'postgresql' else "?"
@@ -1824,7 +2546,12 @@ with tab_hist:
 
                 where_clauses = []
                 params = []
-                if f_center:
+
+                # ── Filtros básicos ────────────────────────────────────────
+                if is_jt and JT_CENTRO:
+                    where_clauses.append(f"centro = {p}")
+                    params.append(JT_CENTRO)
+                elif f_center:
                     ph = ", ".join([p]*len(f_center))
                     where_clauses.append(f"centro IN ({ph})")
                     params.extend(f_center)
@@ -1840,57 +2567,185 @@ with tab_hist:
                     where_clauses.append(f"(LOWER(driver_name) LIKE {p} OR LOWER(driver_id) LIKE {p})")
                     params.extend([f"%{search_term.lower()}%", f"%{search_term.lower()}%"])
 
+                # ── Filtros avanzados ──────────────────────────────────────
+                if f_problemas:
+                    # OR entre problemas seleccionados: LIKE '%DNR%' OR LIKE '%DCR%' ...
+                    prob_clauses = []
+                    for prob_label in f_problemas:
+                        keyword = PROBLEMAS_OPCIONES[prob_label]
+                        prob_clauses.append(f"LOWER(detalles) LIKE {p}")
+                        params.append(f"%{keyword.lower()}%")
+                    where_clauses.append(f"({' OR '.join(prob_clauses)})")
+
+                if f_dnr_min > 0:
+                    where_clauses.append(f"dnr >= {p}")
+                    params.append(float(f_dnr_min))
+
+                if f_score_max < 100:
+                    where_clauses.append(f"score <= {p}")
+                    params.append(float(f_score_max))
+
+                if f_dcr_max < 100.0:
+                    where_clauses.append(f"dcr <= {p}")
+                    params.append(f_dcr_max / 100.0)
+
+                if f_pod_max < 100.0:
+                    where_clauses.append(f"pod <= {p}")
+                    params.append(f_pod_max / 100.0)
+
                 where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+                # ── Paginación real con LIMIT/OFFSET ──────────────────────
+                PAGE_SIZE = 200
+                page = st.session_state.get('hist_page', 0)
+
+                # Contar total primero (query ligera)
+                with scorecard.db_connection(db_config) as conn_count:
+                    df_count = pd.read_sql_query(
+                        f"SELECT COUNT(*) AS n FROM scorecards {where_sql}",
+                        conn_count, params=params if params else None
+                    )
+                total_rows = int(df_count['n'].iloc[0]) if not df_count.empty else 0
+
+                total_pages = max(1, (total_rows + PAGE_SIZE - 1) // PAGE_SIZE)
+                page = min(page, total_pages - 1)
+
+                offset = page * PAGE_SIZE
                 q = f"""
                     SELECT semana, centro, driver_name AS conductor, driver_id AS id,
-                           calificacion, score, dnr, ROUND(dcr*100,2) as dcr_pct,
-                           ROUND(pod*100,2) as pod_pct, ROUND(cc*100,2) as cc_pct,
-                           detalles
+                           calificacion, score, dnr, dcr, pod, cc, detalles
                     FROM scorecards {where_sql}
-                    ORDER BY semana DESC, score DESC
-                    LIMIT {HISTORICO_MAX_ROWS}
+                    ORDER BY fecha_semana DESC, semana DESC, score DESC
+                    LIMIT {PAGE_SIZE} OFFSET {offset}
                 """
-                conn2 = scorecard.get_db_connection(db_config=db_config)
-                df_filtered = pd.read_sql_query(q, conn2, params=params if params else None)
-                conn2.close()
+                with scorecard.db_connection(db_config) as conn2:
+                    df_filtered = pd.read_sql_query(q, conn2, params=params if params else None)
+                for _c, _p in [('dcr','dcr_pct'),('pod','pod_pct'),('cc','cc_pct')]:
+                    if _c in df_filtered.columns:
+                        df_filtered[_p] = (df_filtered[_c] * 100).round(2)
 
-                if not df_filtered.empty:
+                st.session_state['_hist_df'] = df_filtered
+                st.session_state['_hist_params']    = params
+                st.session_state['_hist_where_sql'] = where_sql
+                st.session_state['_hist_total_rows'] = total_rows
+
+                if total_rows == 0:
+                    st.warning("No se encontraron registros con esos filtros.")
+                else:
                     # KPIs resumen
                     c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("Registros",     len(df_filtered))
-                    c2.metric("DNR Promedio",  f"{df_filtered['dnr'].mean():.2f}")
-                    c3.metric("Score Promedio",f"{df_filtered['score'].mean():.1f}")
-                    c4.metric("DCR Promedio",  f"{df_filtered['dcr_pct'].mean():.2f}%")
-
-                    if len(df_filtered) == HISTORICO_MAX_ROWS:
-                        st.info(f"Mostrando los primeros {HISTORICO_MAX_ROWS:,} resultados. Aplica más filtros para afinar.")
+                    c1.metric("Total registros", f"{total_rows:,}")
+                    c2.metric("DNR Promedio",    f"{df_filtered['dnr'].mean():.2f}")
+                    c3.metric("Score Promedio",  f"{df_filtered['score'].mean():.1f}")
+                    c4.metric("DCR Promedio",    f"{df_filtered['dcr_pct'].mean():.2f}%")
 
                     st.divider()
+
+                    # Paginador
+                    _render_pagination(
+                        'hist_page', page, total_pages, total_rows, PAGE_SIZE,
+                        prev_key='hist_prev', next_key='hist_next',
+                    )
+
+
                     st.dataframe(
                         df_filtered,
                         column_config={
-                            "conductor":   st.column_config.TextColumn("Conductor", width="medium"),
-                            "id":          st.column_config.TextColumn("ID", width="small"),
-                            "calificacion":st.column_config.TextColumn("Calificación", width="small"),
-                            "score":       st.column_config.NumberColumn("Score", format="%d"),
-                            "dnr":         st.column_config.NumberColumn("DNR", format="%d"),
-                            "dcr_pct":     st.column_config.NumberColumn("DCR%", format="%.2f"),
-                            "pod_pct":     st.column_config.NumberColumn("POD%", format="%.2f"),
-                            "cc_pct":      st.column_config.NumberColumn("CC%", format="%.2f"),
-                            "detalles":    st.column_config.TextColumn("Detalles", width="large"),
+                            "conductor":    st.column_config.TextColumn("Conductor", width="medium"),
+                            "id":           st.column_config.TextColumn("ID", width="small"),
+                            "calificacion": st.column_config.TextColumn("Calificación", width="small"),
+                            "score":        st.column_config.NumberColumn("Score", format="%d"),
+                            "dnr":          st.column_config.NumberColumn("DNR", format="%d"),
+                            "dcr_pct":      st.column_config.NumberColumn("DCR%", format="%.2f"),
+                            "pod_pct":      st.column_config.NumberColumn("POD%", format="%.2f"),
+                            "cc_pct":       st.column_config.NumberColumn("CC%", format="%.2f"),
+                            "detalles":     st.column_config.TextColumn("Detalles", width="large"),
                         },
                         use_container_width=True,
                         hide_index=True,
                         height=450,
                     )
 
-                    if is_admin:
-                        csv = df_filtered.to_csv(index=False).encode('utf-8')
+                    # ── E) Export: página actual + export completo (admin) ─
+                    dl1, dl2 = st.columns(2)
+                    with dl1:
+                        csv_page = df_filtered.to_csv(index=False).encode('utf-8')
                         st.download_button(
-                            "📥 Descargar CSV", csv, "historico.csv", "text/csv"
+                            f"📥 Descargar página ({len(df_filtered)} filas)",
+                            csv_page, "historico_pagina.csv", "text/csv",
+                            use_container_width=True
                         )
-                else:
-                    st.warning("No se encontraron registros con esos filtros.")
+                    if is_admin:
+                        with dl2:
+                            if st.button("📦 Exportar todo (Power BI)", use_container_width=True,
+                                         help="Descarga TODOS los registros filtrados en un CSV optimizado para Power BI"):
+                                with st.spinner("Generando export completo..."):
+                                    q_full = f"""
+                                        SELECT semana, centro, driver_id, driver_name,
+                                               calificacion, score, dnr, fs_count,
+                                               dcr, pod, cc, rts, cdf, fdps, pdf_loaded,
+                                               entregados_oficial, dcr_oficial, pod_oficial,
+                                               lor_dpmo, dsc_dpmo, ce_dpmo,
+                                               fecha_semana, uploaded_by, timestamp
+                                        FROM scorecards {where_sql}
+                                        ORDER BY fecha_semana DESC, semana DESC, centro, score DESC
+                                    """
+                                    with scorecard.db_connection(db_config) as conn_full:
+                                        df_full = pd.read_sql_query(
+                                            q_full, conn_full,
+                                            params=params if params else None
+                                        )
+                                    for _c, _p in [('dcr','dcr_pct'),('pod','pod_pct'),('cc','cc_pct'),
+                                                   ('rts','rts_pct'),('cdf','cdf_pct'),
+                                                   ('dcr_oficial','dcr_oficial_pct'),
+                                                   ('pod_oficial','pod_oficial_pct')]:
+                                        if _c in df_full.columns:
+                                            df_full[_p] = (df_full[_c] * 100).round(2)
+                                    csv_full = df_full.to_csv(index=False).encode('utf-8')
+                                    st.download_button(
+                                        f"⬇️ Descargar {len(df_full):,} filas",
+                                        csv_full,
+                                        f"winiw_export_powerbi_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                                        "text/csv",
+                                        use_container_width=True
+                                    )
+            # ── Si no se pulsó Buscar pero hay resultados previos: redibujar ─
+            elif st.session_state.get("_hist_df") is not None:
+                df_filtered = st.session_state["_hist_df"]
+                page      = st.session_state.get("hist_page", 0)
+                PAGE_SIZE = 200
+                total_rows = st.session_state.get('_hist_total_rows', len(df_filtered))
+                total_pages = max(1, (total_rows + PAGE_SIZE - 1) // PAGE_SIZE)
+                offset = page * PAGE_SIZE
+                df_page_hist = df_filtered.iloc[offset:offset+PAGE_SIZE]
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Total", f"{total_rows:,}")
+                c2.metric('DNR medio',   f"{df_filtered['dnr'].mean():.2f}")
+                c3.metric('Score medio', f"{df_filtered['score'].mean():.1f}")
+                c4.metric('DCR medio',   f"{(df_filtered['dcr_pct'].mean() if 'dcr_pct' in df_filtered.columns else 0):.2f}%")
+                st.divider()
+                _render_pagination(
+                    'hist_page', page, total_pages, total_rows, PAGE_SIZE,
+                    prev_key='hist_prev2', next_key='hist_next2',
+                )
+                st.dataframe(
+                    df_page_hist,
+                    column_config={
+                        "conductor":    st.column_config.TextColumn("Conductor", width="medium"),
+                        "id":           st.column_config.TextColumn("ID", width="small"),
+                        "calificacion": st.column_config.TextColumn("Calificación", width="small"),
+                        "score":        st.column_config.NumberColumn("Score", format="%d"),
+                        "dnr":          st.column_config.NumberColumn("DNR", format="%d"),
+                        "dcr_pct":      st.column_config.NumberColumn("DCR%", format="%.2f"),
+                        "pod_pct":      st.column_config.NumberColumn("POD%", format="%.2f"),
+                        "cc_pct":       st.column_config.NumberColumn("CC%", format="%.2f"),
+                        "detalles":     st.column_config.TextColumn("Detalles", width="large"),
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                    height=450,
+                )
+
             else:
                 st.info("👆 Aplica filtros y pulsa Buscar.")
 
@@ -1940,114 +2795,464 @@ with tab_profile:
                     st.error("❌ La contraseña actual es incorrecta")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TAB: ADMINISTRACIÓN (sin cambios funcionales, mejorado visualmente)
+# TAB: ADMINISTRACIÓN
 # ─────────────────────────────────────────────────────────────────────────────
 
 if tab_admin:
     with tab_admin:
         st.header("👑 Panel de Administración")
 
-        # ── Gestión de Usuarios ───────────────────────────────────────────
+        # ── Gestión de Usuarios ───────────────────────────────────────────────
         st.subheader("👥 Gestión de Usuarios")
-        col1, col2 = st.columns(2)
 
-        with col1:
-            st.markdown("#### ➕ Crear Usuario")
+        # ── Tabla completa de usuarios con estado en tiempo real ──────────────
+        try:
+            with scorecard.db_connection(db_config) as conn:
+                df_users = pd.read_sql_query(
+                    """SELECT u.username, u.role, u.active, u.must_change_password,
+                              la.attempt_count, la.locked_until
+                       FROM users u
+                       LEFT JOIN login_attempts la ON LOWER(u.username) = LOWER(la.username)
+                       ORDER BY
+                           CASE u.role WHEN 'superadmin' THEN 1 WHEN 'admin' THEN 2 ELSE 3 END,
+                           u.username""",
+                    conn
+                )
+        except Exception:
+            df_users = pd.DataFrame()
+
+        if not df_users.empty:
+            # Construir tabla HTML con semáforos de estado
+            role_badge = {
+                'superadmin': ("<span style='background:#dc3545;color:white;padding:2px 8px;"
+                               "border-radius:10px;font-size:0.8em'>👑 Superadmin</span>"),
+                'admin':      ("<span style='background:#0d6efd;color:white;padding:2px 8px;"
+                               "border-radius:10px;font-size:0.8em'>🔑 Admin</span>"),
+                'jt':         ("<span style='background:#198754;color:white;padding:2px 8px;"
+                               "border-radius:10px;font-size:0.8em'>👔 JT</span>"),
+            }
+
+            rows_html = []
+            for i, row in enumerate(df_users.itertuples(index=False)):
+                bg = '#ffffff' if i % 2 == 0 else '#f8f9fa'
+
+                # Estado de la cuenta
+                if not row.active:
+                    status = "<span style='color:#6c757d'>⬛ Inactivo</span>"
+                elif getattr(row, 'locked_until', None) is not None and pd.notna(row.locked_until):
+                    try:
+                        lu = datetime.strptime(str(row.locked_until)[:19], "%Y-%m-%d %H:%M:%S")
+                        if datetime.now() < lu:
+                            status = "<span style='color:#dc3545'>🔒 Bloqueado</span>"
+                        else:
+                            status = "<span style='color:#198754'>✅ Activo</span>"
+                    except Exception:
+                        status = "<span style='color:#198754'>✅ Activo</span>"
+                else:
+                    status = "<span style='color:#198754'>✅ Activo</span>"
+
+                # Indicador de cambio de contraseña pendiente
+                pwd_warn = " <span style='color:#fd7e14;font-size:0.75em'>⚠️ cambio pendiente</span>" if row.must_change_password else ""
+
+                rows_html.append(f"""
+                <tr style='background:{bg}'>
+                    <td style='padding:8px 12px;font-weight:600'>{row.username}{pwd_warn}</td>
+                    <td style='padding:8px 12px'>{role_badge.get(row.role, row.role)}</td>
+                    <td style='padding:8px 12px'>{status}</td>
+                    <td style='padding:8px 12px;text-align:center;color:{"#dc3545" if getattr(row,"attempt_count",0) and getattr(row,"attempt_count",0) > 0 else "#6c757d"}'>{int(row.attempt_count) if pd.notna(row.attempt_count) else 0}</td>
+                </tr>
+                """)
+
+            _clean_user_rows = "".join(r.strip() for r in rows_html)
+            st.markdown(clean_html(f"""
+<div style='overflow-x:auto;border-radius:8px;border:1px solid #dee2e6;margin-bottom:1rem'>
+<table style='width:100%;border-collapse:collapse;font-size:0.9em'>
+<thead>
+<tr style='background:#232f3e;color:white'>
+<th style='padding:10px 12px;text-align:left'>Usuario</th>
+<th style='padding:10px 12px;text-align:left'>Rol</th>
+<th style='padding:10px 12px;text-align:left'>Estado</th>
+<th style='padding:10px 12px;text-align:center'>Intentos fallidos</th>
+</tr>
+</thead>
+<tbody>{_clean_user_rows}</tbody>
+</table></div>
+"""), unsafe_allow_html=True)
+        else:
+            st.info("No hay usuarios en la BD todavía.")
+
+        st.markdown("---")
+
+        # ── 4 acciones en columnas ────────────────────────────────────────────
+        col_create, col_edit, col_reset, col_delete = st.columns(4)
+
+        # ── CREAR ─────────────────────────────────────────────────────────────
+        with col_create:
+            st.markdown("#### ➕ Crear usuario")
             with st.form("create_user_form"):
-                new_username = st.text_input("Nombre de Usuario")
-                new_password = st.text_input("Contraseña", type="password",
-                                             help="Mínimo 8 caracteres")
+                new_username = st.text_input("Nombre de usuario")
+                new_password = st.text_input("Contraseña temporal", type="password",
+                                             help="Mínimo 8 caracteres. El usuario deberá cambiarla al entrar.")
+                new_password_confirm = st.text_input("Confirmar contraseña", type="password")
                 if is_superadmin:
                     new_role = st.selectbox("Rol", ["jt", "admin", "superadmin"])
                 else:
                     new_role = "jt"
-                    st.info("ℹ️ Los admins solo pueden crear usuarios JT")
+                    st.caption("ℹ️ Los admins solo pueden crear JTs.")
 
-                if st.form_submit_button("Crear Usuario", use_container_width=True):
-                    if not new_username or not new_password:
+                # Centro asignado (solo visible si el rol es JT)
+                centros_disponibles = ["(Sin restricción)"]
+                try:
+                    with scorecard.db_connection(db_config) as conn_c:
+                        centros_disponibles += pd.read_sql_query(
+                            "SELECT DISTINCT centro FROM scorecards ORDER BY centro", conn_c
+                        )['centro'].tolist()
+                except Exception as _e:
+                    _log.debug(f"centros_disponibles: {_e}")
+                new_centro_asignado = st.selectbox(
+                    "Centro asignado (solo JTs)", centros_disponibles,
+                    help="Restringe al JT a ver solo este centro. 'Sin restricción' = ve todos.",
+                    key="create_user_centro"
+                )
+
+                if st.form_submit_button("✅ Crear", use_container_width=True, type="primary"):
+                    if not new_username.strip() or not new_password:
                         st.error("❌ Completa todos los campos")
+                    elif new_password != new_password_confirm:
+                        st.error("❌ Las contraseñas no coinciden")
                     elif len(new_password) < 8:
                         st.error("❌ Mínimo 8 caracteres")
+                    elif new_role not in ['jt', 'admin', 'superadmin']:
+                        st.error("❌ Rol inválido")
                     else:
                         try:
-                            conn = scorecard.get_db_connection(db_config)
-                            cursor = conn.cursor()
-                            q = ("INSERT INTO users (username, password, role, active, must_change_password) "
-                                 "VALUES (%s, %s, %s, 1, 1)"
-                                 if db_config['type'] == 'postgresql' else
-                                 "INSERT INTO users (username, password, role, active, must_change_password) "
-                                 "VALUES (?, ?, ?, 1, 1)")
-                            cursor.execute(q, (new_username, scorecard.hash_password(new_password), new_role))
-                            conn.commit()
-                            conn.close()
-                            _audit(f"Creó usuario '{new_username}' con rol '{new_role}'")
-                            st.success(f"✅ Usuario '{new_username}' creado (deberá cambiar contraseña al entrar)")
-                            st.rerun()
+                            centro_val = (
+                                new_centro_asignado
+                                if new_role == 'jt' and new_centro_asignado != "(Sin restricción)"
+                                else None
+                            )
+                            ph = "%s" if db_config['type'] == 'postgresql' else "?"
+                            with scorecard.db_connection(db_config) as conn:
+                                cursor = conn.cursor()
+                                cursor.execute(
+                                    f"INSERT INTO users (username, password, role, active, "
+                                    f"must_change_password, centro_asignado) "
+                                    f"VALUES ({ph}, {ph}, {ph}, 1, 1, {ph})",
+                                    (new_username.strip(), scorecard.hash_password(new_password),
+                                     new_role, centro_val)
+                                )
+                                conn.commit()
+                            centro_info = f" → centro: {centro_val}" if centro_val else ""
+                            _audit(f"Creó usuario '{new_username.strip()}' rol='{new_role}'{centro_info}")
+                            st.success(f"✅ '{new_username.strip()}' creado{centro_info}")
+                            cached_user_centro.clear()
+                            st.rerun()  # Refresca lista de usuarios tras crear uno nuevo
                         except Exception as e:
-                            if "UNIQUE" in str(e) or "unique" in str(e):
+                            if "UNIQUE" in str(e).upper() or "unique" in str(e):
                                 st.error("❌ El usuario ya existe")
                             else:
                                 st.error(f"❌ Error: {e}")
 
-        with col2:
-            st.markdown("#### 📋 Usuarios Activos")
-            try:
-                conn = scorecard.get_db_connection(db_config)
-                df_users = pd.read_sql_query(
-                    "SELECT username, role, active FROM users ORDER BY role, username", conn
-                )
-                conn.close()
+        # ── CAMBIAR ROL ───────────────────────────────────────────────────────
+        with col_edit:
+            st.markdown("#### ✏️ Cambiar rol")
+            if not df_users.empty:
+                # Solo superadmin puede cambiar roles de admins/superadmins
+                editable = df_users[
+                    (df_users['username'] != user_data_session['name']) &
+                    (df_users['active'] == 1)
+                ]
+                if not is_superadmin:
+                    editable = editable[editable['role'] == 'jt']
 
-                if not df_users.empty:
-                    st.dataframe(df_users, use_container_width=True, height=180, hide_index=True)
-
-                    st.markdown("#### 🗑️ Eliminar Usuario")
-                    user_to_delete = st.selectbox("Seleccionar", df_users['username'].tolist())
-
-                    if st.button("Eliminar seleccionado", type="secondary", use_container_width=True):
-                        if user_to_delete == user_data_session['name']:
-                            st.error("❌ No puedes eliminarte a ti mismo")
-                        else:
+                with st.form("change_role_form"):
+                    if not editable.empty:
+                        target_edit = st.selectbox("Usuario", editable['username'].tolist(), key="edit_user_sel")
+                        new_role_edit = st.selectbox(
+                            "Nuevo rol",
+                            ["jt", "admin"] if not is_superadmin else ["jt", "admin", "superadmin"],
+                            key="edit_role_sel"
+                        )
+                        if st.form_submit_button("💾 Guardar", use_container_width=True):
                             try:
-                                target_role = get_user_role(user_to_delete, db_config)
-                                # Un superadmin solo puede borrarse si hay otro superadmin
-                                if target_role == 'superadmin':
-                                    conn_c = scorecard.get_db_connection(db_config)
-                                    cursor_c = conn_c.cursor()
-                                    p2 = "%s" if db_config['type'] == 'postgresql' else "?"
-                                    cursor_c.execute(
-                                        f"SELECT COUNT(*) FROM users WHERE role = {p2} AND active = 1",
-                                        ('superadmin',)
-                                    )
-                                    total_sa = cursor_c.fetchone()[0]
-                                    conn_c.close()
-                                    if total_sa <= 1:
-                                        st.error("🛑 No se puede eliminar al único Superadmin del sistema")
-                                        # No usar st.stop() — detiene el render completo de la app.
-                                        # Salimos del bloque con la condición else encadenada abajo.
-                                        target_role = None  # Fuerza el path de error sin borrar
-                                if target_role in ['admin', 'superadmin'] and not is_superadmin:
-                                    st.error("🛑 Solo el Superadmin puede eliminar administradores")
-                                elif target_role is None:
-                                    st.error("❌ Usuario no encontrado")
+                                current = get_user_role(target_edit, db_config)
+                                if current == 'superadmin' and not is_superadmin:
+                                    st.error("🛑 Solo superadmin puede cambiar el rol de otro superadmin")
                                 else:
-                                    conn = scorecard.get_db_connection(db_config)
-                                    cursor = conn.cursor()
-                                    q_d = ("DELETE FROM users WHERE username = %s"
-                                           if db_config['type'] == 'postgresql' else
-                                           "DELETE FROM users WHERE username = ?")
-                                    cursor.execute(q_d, (user_to_delete,))
-                                    conn.commit()
-                                    conn.close()
-                                    _audit(f"Eliminó usuario '{user_to_delete}' (rol: {target_role})")
-                                    st.success(f"✅ '{user_to_delete}' eliminado")
-                                    st.rerun()
+                                    ph2 = "%s" if db_config['type'] == 'postgresql' else "?"
+                                    with scorecard.db_connection(db_config) as conn:
+                                        cursor = conn.cursor()
+                                        cursor.execute(
+                                            f"UPDATE users SET role = {ph2} WHERE username = {ph2}",
+                                            (new_role_edit, target_edit)
+                                        )
+                                        conn.commit()
+                                    _audit(f"Cambió rol de '{target_edit}': {current} → {new_role_edit}")
+                                    st.success(f"✅ {target_edit}: {current} → {new_role_edit}")
+                                    st.rerun()  # Refresca tabla de roles tras cambio
                             except Exception as e:
                                 st.error(f"❌ Error: {e}")
-            except Exception as e:
-                st.error(f"Error: {e}")
+                    else:
+                        st.caption("No hay usuarios editables.")
+                        st.form_submit_button("—", disabled=True)
+            else:
+                st.caption("Sin usuarios.")
 
-        # ── Zona Superadmin ──────────────────────────────────────────────
+        # ── RESETEAR CONTRASEÑA ───────────────────────────────────────────────
+        with col_reset:
+            st.markdown("#### 🔑 Resetear contraseña")
+            if not df_users.empty:
+                resettable = df_users[df_users['username'] != user_data_session['name']]
+                if not is_superadmin:
+                    resettable = resettable[resettable['role'] == 'jt']
+
+                with st.form("reset_pw_form"):
+                    if not resettable.empty:
+                        target_reset = st.selectbox("Usuario", resettable['username'].tolist(), key="reset_user_sel")
+                        new_pw_reset  = st.text_input("Nueva contraseña", type="password", key="reset_pw_input",
+                                                      help="Mínimo 8 caracteres. El usuario deberá cambiarla al entrar.")
+                        new_pw_reset2 = st.text_input("Confirmar", type="password", key="reset_pw_input2")
+
+                        if st.form_submit_button("🔄 Resetear", use_container_width=True):
+                            if not new_pw_reset:
+                                st.error("❌ Introduce una contraseña")
+                            elif new_pw_reset != new_pw_reset2:
+                                st.error("❌ Las contraseñas no coinciden")
+                            elif len(new_pw_reset) < 8:
+                                st.error("❌ Mínimo 8 caracteres")
+                            else:
+                                try:
+                                    target_role_r = get_user_role(target_reset, db_config)
+                                    if target_role_r in ['admin', 'superadmin'] and not is_superadmin:
+                                        st.error("🛑 Solo superadmin puede resetear contraseñas de admins")
+                                    else:
+                                        new_h = scorecard.hash_password(new_pw_reset)
+                                        ph3 = "%s" if db_config['type'] == 'postgresql' else "?"
+                                        with scorecard.db_connection(db_config) as conn:
+                                            cursor = conn.cursor()
+                                            cursor.execute(
+                                                f"UPDATE users SET password = {ph3}, must_change_password = 1 "
+                                                f"WHERE username = {ph3}",
+                                                (new_h, target_reset)
+                                            )
+                                            conn.commit()
+                                        _audit(f"Reseteó contraseña de '{target_reset}'")
+                                        st.success(f"✅ Contraseña de '{target_reset}' reseteada")
+                                except Exception as e:
+                                    st.error(f"❌ Error: {e}")
+                    else:
+                        st.caption("Sin usuarios disponibles.")
+                        st.form_submit_button("—", disabled=True)
+            else:
+                st.caption("Sin usuarios.")
+
+        # ── ACTIVAR / DESACTIVAR / ELIMINAR ───────────────────────────────────
+        with col_delete:
+            st.markdown("#### 🗑️ Desactivar / Eliminar")
+            if not df_users.empty:
+                manageable = df_users[df_users['username'] != user_data_session['name']]
+                if not is_superadmin:
+                    manageable = manageable[manageable['role'] == 'jt']
+
+                with st.form("manage_user_form"):
+                    if not manageable.empty:
+                        target_manage = st.selectbox("Usuario", manageable['username'].tolist(), key="manage_user_sel")
+                        action = st.radio("Acción", ["Desactivar", "Reactivar", "Eliminar permanentemente"],
+                                          key="manage_action")
+
+                        col_btn1, col_btn2 = st.columns(2)
+                        confirm_del = st.checkbox("Confirmar acción", key="confirm_manage")
+
+                        if st.form_submit_button("⚡ Ejecutar", use_container_width=True,
+                                                  type="primary" if action == "Eliminar permanentemente" else "secondary"):
+                            if not confirm_del:
+                                st.error("❌ Marca la casilla de confirmación")
+                            else:
+                                try:
+                                    target_role_m = get_user_role(target_manage, db_config)
+
+                                    # Guardar superadmin único
+                                    if target_role_m == 'superadmin':
+                                        ph4 = "%s" if db_config['type'] == 'postgresql' else "?"
+                                        with scorecard.db_connection(db_config) as conn_c:
+                                            cursor_c = conn_c.cursor()
+                                            cursor_c.execute(
+                                                f"SELECT COUNT(*) FROM users WHERE role = {ph4} AND active = 1",
+                                                ('superadmin',)
+                                            )
+                                            total_sa = cursor_c.fetchone()[0]
+                                        if total_sa <= 1 and action != "Reactivar":
+                                            st.error("🛑 No puedes desactivar/eliminar al único Superadmin")
+                                            st.stop()
+
+                                    if target_role_m in ['admin', 'superadmin'] and not is_superadmin:
+                                        st.error("🛑 Solo un Superadmin puede gestionar admins")
+                                    else:
+                                        ph5 = "%s" if db_config['type'] == 'postgresql' else "?"
+                                        with scorecard.db_connection(db_config) as conn:
+                                            cursor = conn.cursor()
+                                            if action == "Desactivar":
+                                                cursor.execute(
+                                                    f"UPDATE users SET active = 0 WHERE username = {ph5}",
+                                                    (target_manage,)
+                                                )
+                                                msg = f"'{target_manage}' desactivado"
+                                            elif action == "Reactivar":
+                                                cursor.execute(
+                                                    f"UPDATE users SET active = 1 WHERE username = {ph5}",
+                                                    (target_manage,)
+                                                )
+                                                msg = f"'{target_manage}' reactivado"
+                                            else:  # Eliminar permanentemente
+                                                cursor.execute(
+                                                    f"DELETE FROM users WHERE username = {ph5}",
+                                                    (target_manage,)
+                                                )
+                                                cursor.execute(
+                                                    f"DELETE FROM login_attempts WHERE LOWER(username) = LOWER({ph5})",
+                                                    (target_manage,)
+                                                )
+                                                msg = f"'{target_manage}' eliminado permanentemente"
+                                            conn.commit()
+                                        _audit(f"{action}: {msg}")
+                                        st.success(f"✅ {msg}")
+                                        st.rerun()  # Refresca lista tras acción admin
+                                except Exception as e:
+                                    st.error(f"❌ Error: {e}")
+                    else:
+                        st.caption("Sin usuarios gestionables.")
+                        st.form_submit_button("—", disabled=True)
+            else:
+                st.caption("Sin usuarios.")
+
+        st.markdown("---")
+
+        # ── Desbloquear usuario bloqueado por rate limiting ───────────────────
+        st.subheader("🔓 Desbloquear Cuentas")
+        try:
+            with scorecard.db_connection(db_config) as conn:
+                df_locked = pd.read_sql_query(
+                    "SELECT username, attempt_count, locked_until FROM login_attempts "
+                    "WHERE locked_until IS NOT NULL ORDER BY locked_until DESC",
+                    conn
+                )
+
+            if df_locked.empty:
+                st.success("✅ No hay cuentas bloqueadas actualmente.")
+            else:
+                # Filtrar solo las que siguen bloqueadas — comparar datetime, no string
+                now_dt = datetime.now()
+                df_still_locked = df_locked[df_locked['locked_until'].apply(lambda v: _is_still_locked(v, now_dt))]
+
+                if df_still_locked.empty:
+                    st.success("✅ No hay cuentas actualmente bloqueadas.")
+                else:
+                    st.warning(f"⚠️ {len(df_still_locked)} cuenta(s) bloqueada(s) por intentos fallidos:")
+
+                    for lrow in df_still_locked.itertuples(index=False):
+                        try:
+                            lu = datetime.strptime(str(lrow.locked_until)[:19], "%Y-%m-%d %H:%M:%S")
+                            remaining_mins = max(0, int((lu - datetime.now()).total_seconds() // 60))
+                        except Exception:
+                            remaining_mins = "?"
+
+                        lcol1, lcol2 = st.columns([3, 1])
+                        lcol1.markdown(
+                            f"🔒 **{lrow.username}** — "
+                            f"{int(lrow.attempt_count)} intentos fallidos — "
+                            f"se desbloquea en ~{remaining_mins} min"
+                        )
+                        if lcol2.button("Desbloquear", key=f"unlock_{lrow.username}", use_container_width=True):
+                            try:
+                                scorecard.record_login_attempt(
+                                    lrow.username, success=True, db_config=db_config
+                                )
+                                _audit(f"Desbloqueó manualmente a '{lrow.username}'")
+                                st.success(f"✅ '{lrow.username}' desbloqueado")
+                                st.rerun()  # Refresca lista de bloqueados
+                            except Exception as e:
+                                st.error(f"❌ Error: {e}")
+        except Exception as e:
+            st.warning(f"No se pudo cargar el estado de bloqueos: {e}")
+
+        # ── F) Asignación de Centro a JTs existentes ─────────────────────────
+        st.markdown("---")
+        st.subheader("🗺️ Centro Asignado por JT")
+        st.caption(
+            "Restringe a cada JT a ver solo los datos de su centro. "
+            "Sin asignación, el JT puede ver todos los centros."
+        )
+
+        try:
+            with scorecard.db_connection(db_config) as conn_jt:
+                df_jts = pd.read_sql_query(
+                    "SELECT username, centro_asignado FROM users "
+                    "WHERE role = 'jt' AND active = 1 ORDER BY username",
+                    conn_jt
+                )
+
+            if df_jts.empty:
+                st.info("No hay usuarios JT activos.")
+            else:
+                # Obtener centros disponibles
+                centros_asig = ["(Sin restricción)"]
+                try:
+                    with scorecard.db_connection(db_config) as conn_cen:
+                        centros_asig += pd.read_sql_query(
+                            "SELECT DISTINCT centro FROM scorecards ORDER BY centro", conn_cen
+                        )['centro'].tolist()
+                except Exception as _e:
+                    _log.debug(f"centros_asig: {_e}")
+
+                # Tabla de asignaciones actuales
+                rows_jt = []
+                for jr in df_jts.itertuples(index=False):
+                    centro_actual = jr.centro_asignado or "—  (todos)"
+                    badge_c = (
+                        f"<span style='background:#0d6efd;color:white;padding:2px 8px;"
+                        f"border-radius:10px;font-size:0.8em'>{jr.centro_asignado}</span>"
+                        if jr.centro_asignado
+                        else "<span style='color:#6c757d;font-size:0.85em'>Sin restricción</span>"
+                    )
+                    rows_jt.append(
+                        f"<tr><td style='padding:8px 12px;font-weight:600'>{jr.username}</td>"
+                        f"<td style='padding:8px 12px'>{badge_c}</td></tr>"
+                    )
+
+                st.markdown(f"""
+                <div style='border-radius:8px;border:1px solid #dee2e6;overflow:hidden;margin-bottom:1rem'>
+                <table style='width:100%;border-collapse:collapse;font-size:0.9em'>
+                    <thead><tr style='background:#232f3e;color:white'>
+                        <th style='padding:8px 12px;text-align:left'>JT</th>
+                        <th style='padding:8px 12px;text-align:left'>Centro asignado</th>
+                    </tr></thead>
+                    <tbody>{''.join(rows_jt)}</tbody>
+                </table></div>
+                """, unsafe_allow_html=True)
+
+                with st.form("assign_centro_form"):
+                    ac1, ac2, ac3 = st.columns([2, 2, 1])
+                    jt_to_assign = ac1.selectbox(
+                        "JT", df_jts['username'].tolist(), key="assign_jt_sel"
+                    )
+                    centro_to_assign = ac2.selectbox(
+                        "Centro", centros_asig, key="assign_centro_sel"
+                    )
+                    if st.form_submit_button("💾 Guardar asignación", use_container_width=True):
+                        valor = None if centro_to_assign == "(Sin restricción)" else centro_to_assign
+                        ok_ca = scorecard.set_user_centro(jt_to_assign, valor, db_config)
+                        if ok_ca:
+                            cached_user_centro.clear()
+                            info = f"→ {valor}" if valor else "→ sin restricción"
+                            _audit(f"Asignó centro a '{jt_to_assign}' {info}")
+                            st.success(f"✅ '{jt_to_assign}' {info}")
+                            st.rerun()  # Refresca asignación de centro
+                        else:
+                            st.error("❌ Error guardando la asignación")
+        except Exception as e:
+            st.warning(f"No se pudo cargar JTs: {e}")
+
+        # ── Zona Superadmin ──────────────────────────────────────────────────
         if is_superadmin:
             st.divider()
             st.subheader("👑 Zona Superadmin")
@@ -2056,21 +3261,20 @@ if tab_admin:
 
             with t1:
                 try:
-                    conn = scorecard.get_db_connection(db_config)
-                    cursor = conn.cursor()
-                    stats = {}
-                    p = "%s" if db_config['type'] == 'postgresql' else "?"
-                    q_rol = "SELECT COUNT(*) FROM users WHERE role = " + p
-                    for rol in ['superadmin', 'admin', 'jt']:
-                        cursor.execute(q_rol, (rol,))
-                        stats[rol] = cursor.fetchone()[0]
-                    cursor.execute("SELECT COUNT(*) FROM scorecards")
-                    stats['records'] = cursor.fetchone()[0]
-                    cursor.execute(
-                        "SELECT semana, MAX(timestamp) t FROM scorecards GROUP BY semana ORDER BY t DESC LIMIT 5"
-                    )
-                    recent_weeks = cursor.fetchall()
-                    conn.close()
+                    with scorecard.db_connection(db_config) as conn:
+                        cursor = conn.cursor()
+                        stats = {}
+                        p = "%s" if db_config['type'] == 'postgresql' else "?"
+                        q_rol = "SELECT COUNT(*) FROM users WHERE role = " + p
+                        for rol in ['superadmin', 'admin', 'jt']:
+                            cursor.execute(q_rol, (rol,))
+                            stats[rol] = cursor.fetchone()[0]
+                        cursor.execute("SELECT COUNT(*) FROM scorecards")
+                        stats['records'] = cursor.fetchone()[0]
+                        cursor.execute(
+                            f"SELECT semana, MAX(timestamp) t FROM scorecards GROUP BY semana ORDER BY t DESC LIMIT {SEMANAS_RECIENTES}"
+                        )
+                        recent_weeks = cursor.fetchall()
 
                     c1, c2, c3, c4 = st.columns(4)
                     c1.metric("👑 Superadmins", stats['superadmin'])
@@ -2086,43 +3290,41 @@ if tab_admin:
                     st.error(f"Error: {e}")
 
             with t2:
-                log_file = "logs/winiw_scorecard.log"
+                log_file = "logs/winiw_app.log"
                 if os.path.exists(log_file):
                     with open(log_file, 'r', encoding='utf-8') as f:
                         lines = f.readlines()
                     n = st.slider("Líneas a mostrar", 20, 500, 100)
                     st.code(''.join(lines[-n:]), language='log')
-                    st.download_button("📥 Descargar Logs", ''.join(lines), "logs.txt", use_container_width=True)
+                    st.download_button("📥 Descargar Logs", ''.join(lines), "winiw_app.log",
+                                       use_container_width=True)
                 else:
                     st.info("No hay logs disponibles aún.")
 
             with t3:
                 st.warning("⚠️ Cambios que afectan a todo el sistema")
 
-                with st.expander("👑 Promocionar usuario a Superadmin"):
-                    with st.form("promote_form"):
-                        promote_user = st.text_input("Usuario a promocionar")
-                        if st.form_submit_button("Promocionar"):
-                            if promote_user:
-                                try:
-                                    current_role = get_user_role(promote_user, db_config)
-                                    if current_role is None:
-                                        st.error("❌ Usuario no encontrado")
-                                    elif current_role == 'superadmin':
-                                        st.info("ℹ️ Ya es superadmin")
-                                    else:
-                                        conn = scorecard.get_db_connection(db_config)
-                                        cursor = conn.cursor()
-                                        q2 = ("UPDATE users SET role = %s WHERE username = %s"
-                                              if db_config['type'] == 'postgresql' else
-                                              "UPDATE users SET role = ? WHERE username = ?")
-                                        cursor.execute(q2, ('superadmin', promote_user))
-                                        conn.commit()
-                                        conn.close()
-                                        _audit(f"Promovió '{promote_user}' a superadmin (era: {current_role})")
-                                        st.success(f"✅ {promote_user} ahora es SUPERADMIN")
-                                except Exception as e:
-                                    st.error(f"❌ Error: {e}")
+                # ── Test SMTP ───────────────────────────────────────────────
+                st.markdown("#### 📧 Test de Alertas SMTP")
+                smtp_cfg_t   = dict(st.secrets.get("smtp", {})) if hasattr(st, 'secrets') else {}
+                alert_mail_t = st.secrets.get("alert_email", "") if hasattr(st, 'secrets') else ""
+                if smtp_cfg_t and alert_mail_t:
+                    st.caption(f"SMTP: {smtp_cfg_t.get('host','?')}:{smtp_cfg_t.get('port','?')} → {alert_mail_t}")
+                    if st.button("📧 Enviar email de prueba", help="Verifica que el SMTP funciona correctamente"):
+                        with st.spinner("Enviando..."):
+                            ok_smtp = scorecard.send_alert_email(
+                                smtp_cfg_t, alert_mail_t,
+                                "[Test] Winiw Quality Scorecard — SMTP OK",
+                                "<div style='font-family:Arial'><h3>✅ SMTP correcto</h3>"
+                                "<p>Si recibes este email, las alertas automáticas funcionarán.</p></div>"
+                            )
+                        if ok_smtp:
+                            st.success(f"✅ Email de prueba enviado a {alert_mail_t}")
+                        else:
+                            st.error("❌ Fallo SMTP. Revisa host/port/user/password en Secrets.")
+                else:
+                    st.info("Sin configuración SMTP. Añade [smtp] y alert_email en Secrets para activar alertas.")
+                st.divider()
 
                 with st.expander("💾 Info de Base de Datos"):
                     if db_config['type'] == 'postgresql':
@@ -2135,21 +3337,21 @@ if tab_admin:
 
         # ── Gestión de BD ────────────────────────────────────────────────
         st.subheader("🗄️ Gestión de Base de Datos")
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             st.markdown("#### 📊 Estadísticas")
             try:
-                conn = scorecard.get_db_connection(db_config)
-                cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM scorecards")
-                st.metric("Total Registros", f"{cursor.fetchone()[0]:,}")
-                cursor.execute("SELECT COUNT(DISTINCT centro) FROM scorecards")
-                st.metric("Centros", cursor.fetchone()[0])
-                cursor.execute("SELECT COUNT(DISTINCT semana) FROM scorecards")
-                st.metric("Semanas almacenadas", cursor.fetchone()[0])
-                conn.close()
-            except Exception:
+                with scorecard.db_connection(db_config) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM scorecards")
+                    st.metric("Total Registros", f"{cursor.fetchone()[0]:,}")
+                    cursor.execute("SELECT COUNT(DISTINCT centro) FROM scorecards")
+                    st.metric("Centros", cursor.fetchone()[0])
+                    cursor.execute("SELECT COUNT(DISTINCT semana) FROM scorecards")
+                    st.metric("Semanas almacenadas", cursor.fetchone()[0])
+            except Exception as _e:
+                _log.warning(f"stats BD error: {_e}")
                 st.warning("BD vacía")
 
         with col2:
@@ -2167,6 +3369,10 @@ if tab_admin:
                         st.error("Completa ambos campos")
 
         with col3:
+            st.markdown("#### ⚙️ Mantenimiento")
+            st.markdown("")
+
+        with col4:
             st.markdown("#### ⚠️ Zona de Peligro")
             with st.expander("🗑️ Borrar TODO el historial"):
                 st.error("Esta acción es IRREVERSIBLE")
@@ -2174,22 +3380,37 @@ if tab_admin:
                 if st.button("BORRAR TODO", disabled=(confirm != "CONFIRMAR"),
                              type="primary", use_container_width=True):
                     if scorecard.reset_production_database(db_config):
-                        _clear_all_caches()  # Reset total: invalida toda la caché
+                        # Reset total BD — invalidar toda la caché (correcto: toda la BD cambió)
+                        _clear_all_caches()
                         _audit("⚠️ RESET TOTAL de base de datos")
                         st.success("✅ Base de datos limpiada")
-                        st.rerun()
+                        st.rerun()  # Refresca UI tras reset de BD
+
+        # (col3 contenido continúa abajo)
+        with col3:
+            if st.button("🧹 Ejecutar mantenimiento BD",
+                         help="Normaliza semanas y elimina duplicados físicos. Puede tardar unos segundos.",
+                         use_container_width=True):
+                with st.spinner("Ejecutando mantenimiento..."):
+                    ok, removed = scorecard.run_maintenance(db_config)
+                if ok:
+                    st.success(f"✅ Mantenimiento completado: {removed} duplicados eliminados.")
+                    # Mantenimiento puede cambiar cualquier dato — invalidar toda la caché
+                    _clear_all_caches()
+                else:
+                    st.error("❌ Error durante el mantenimiento. Ver logs.")
 
         st.divider()
         st.subheader("🎯 Configuración de Targets por Centro")
         st.caption("Define los umbrales de calidad para cada centro. Afecta al cálculo de scores.")
 
         try:
-            conn = scorecard.get_db_connection(db_config)
-            centros_bd = pd.read_sql_query(
-                "SELECT DISTINCT centro FROM scorecards ORDER BY centro", conn
-            )['centro'].tolist()
-            conn.close()
-        except Exception:
+            with scorecard.db_connection(db_config) as conn:
+                centros_bd = pd.read_sql_query(
+                    "SELECT DISTINCT centro FROM scorecards ORDER BY centro", conn
+                )['centro'].tolist()
+        except Exception as _e:
+            _log.warning(f"centros_bd error: {_e}")
             centros_bd = []
 
         if centros_bd:
@@ -2210,15 +3431,27 @@ if tab_admin:
                                         min_value=80.0, max_value=100.0, step=0.1,
                                         key="nt_cc",   help="80–100%") / 100
 
+            tc5, tc6, tc7 = st.columns(3)
+            new_fdps = tc5.number_input("FDPS Min (%)", value=float(curr['target_fdps']*100),
+                                         min_value=80.0, max_value=100.0, step=0.1,
+                                         key="nt_fdps", help="First Delivery Point Stops (80–100%)") / 100
+            new_rts  = tc6.number_input("RTS Max (%)",  value=float(curr['target_rts']*100),
+                                         min_value=0.0, max_value=10.0, step=0.1,
+                                         key="nt_rts",  help="Return to Station máximo (0–10%)") / 100
+            new_cdf  = tc7.number_input("CDF Min (%)",  value=float(curr['target_cdf']*100),
+                                         min_value=80.0, max_value=100.0, step=0.1,
+                                         key="nt_cdf",  help="Customer Delivery Feedback (80–100%)") / 100
+
             if st.button("💾 Guardar Targets", type="primary"):
                 scorecard.save_center_targets({
                     'centro': sel_target_center,
                     'target_dnr': new_dnr, 'target_dcr': new_dcr,
                     'target_pod': new_pod, 'target_cc': new_cc,
-                    'target_fdps': curr['target_fdps'],
-                    'target_rts': curr['target_rts'],
-                    'target_cdf': curr['target_cdf'],
+                    'target_fdps': new_fdps,
+                    'target_rts': new_rts,
+                    'target_cdf': new_cdf,
                 }, db_config=db_config)
+                cached_center_targets.clear()
                 st.success(f"✅ Targets de {sel_target_center} guardados")
         else:
             st.info("Procesa al menos un scorecard primero para configurar targets.")
@@ -2231,7 +3464,7 @@ st.markdown("---")
 st.markdown("""
 <div style='display:flex;justify-content:space-between;align-items:center;
             color:#6c757d;font-size:0.8em'>
-    <span>🛡️ Winiw Quality Scorecard v3.5 · Amazon DSP</span>
+    <span>🛡️ Winiw Quality Scorecard v3.9 · Amazon DSP</span>
     <span>Supabase guarda todo · Streamlit optimiza los recursos</span>
     <span>🏆 Lideres en calidad</span>
 </div>
