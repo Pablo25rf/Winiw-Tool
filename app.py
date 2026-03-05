@@ -113,28 +113,11 @@ def clean_html(html: str) -> str:
 
 # ── Caché de datos (TTL 5 min para no saturar Supabase) ──────────────────────
 
-@st.cache_data(ttl=300, show_spinner=False)
-def cached_allowed_weeks_jt(_db_config_key: str, db_config: dict) -> list:
-    """Las 2 semanas que puede ver un JT — por timestamp de subida, no por nombre."""
-    try:
-        with scorecard.db_connection(db_config) as conn:
-            df = pd.read_sql_query(
-                "SELECT semana, MAX(timestamp) as last_upload "
-                "FROM scorecards GROUP BY semana ORDER BY last_upload DESC"
-                f" LIMIT {SEMANAS_VISIBLES_JT}",
-                conn
-            )
-        return df['semana'].tolist()
-    except Exception as _e:
-        _log.warning(f"cached_allowed_weeks_jt: {_e}")
-        return []
-
-
 @st.cache_data(ttl=60, show_spinner=False)
 def get_active_weeks(_db_config_key: str, db_config: dict, limit: int = MAX_SEMANAS_ACTIVAS) -> list:
     """
     Devuelve las últimas `limit` semanas por timestamp de subida.
-    Usado para filtrar las vistas principales (Scorecard, Dashboard).
+    Usado para filtrar las vistas principales (Scorecard, Dashboard) y para JT.
     La BD sigue guardando TODO — esto es solo un filtro de visualización.
     """
     try:
@@ -149,6 +132,11 @@ def get_active_weeks(_db_config_key: str, db_config: dict, limit: int = MAX_SEMA
     except Exception as _e:
         _log.warning(f"get_active_weeks: {_e}")
         return []
+
+
+def cached_allowed_weeks_jt(_db_config_key: str, db_config: dict) -> list:
+    """Las 2 semanas que puede ver un JT — delega a get_active_weeks."""
+    return get_active_weeks(_db_config_key, db_config, limit=SEMANAS_VISIBLES_JT)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -654,7 +642,7 @@ def _render_pagination(page_key: str, page: int, total_pages: int,
 def _clear_all_caches():
     """Invalida todas las cachés de datos. Llamar tras cualquier escritura en BD."""
     for _fn in [
-        cached_scorecard, cached_available_batches, cached_allowed_weeks_jt,
+        cached_scorecard, cached_available_batches, get_active_weeks,
         cached_executive_summary, cached_driver_trend, cached_meta,
         cached_centro_tendencia, cached_center_targets, cached_user_centro,
         cached_prev_week, cached_trend_batch, _cached_sidebar_stats,
@@ -666,38 +654,40 @@ def _clear_all_caches():
 
 
 
-def get_user_password_hash(username: str, db_config: dict) -> str | None:
-    """Obtiene el hash de contraseña de un usuario. Devuelve None si no existe."""
+def _get_user_credentials(username: str, db_config: dict) -> tuple:
+    """Un solo round-trip: devuelve (pw_hash | None, user_dict | None)."""
     try:
+        ph = '%s' if db_config.get('type') == 'postgresql' else '?'
         with scorecard.db_connection(db_config) as conn:
             cursor = conn.cursor()
-            q = ("SELECT password FROM users WHERE LOWER(username) = %s AND active = 1"
-                 if db_config['type'] == 'postgresql' else
-                 "SELECT password FROM users WHERE LOWER(username) = ? AND active = 1")
-            cursor.execute(q, (username.strip().lower(),))
+            cursor.execute(
+                f"SELECT password, username, role, must_change_password, centro_asignado "
+                f"FROM users WHERE LOWER(username) = {ph} AND active = 1",
+                (username.strip().lower(),)
+            )
             row = cursor.fetchone()
-        return row[0] if row else None
+        if not row:
+            return None, None
+        user_dict = {
+            "name": row[1], "role": row[2],
+            "must_change_password": bool(row[3]), "centro_asignado": row[4]
+        }
+        return row[0], user_dict
     except Exception as e:
-        _log.warning(f"get_user_password_hash error: {e}")
-        return None
+        _log.warning(f"_get_user_credentials error: {e}")
+        return None, None
+
+
+def get_user_password_hash(username: str, db_config: dict) -> str | None:
+    """Obtiene el hash de contraseña de un usuario. Devuelve None si no existe."""
+    pw_hash, _ = _get_user_credentials(username, db_config)
+    return pw_hash
 
 
 def get_user_data(username: str, db_config: dict) -> dict | None:
     """Obtiene username, role y must_change_password de un usuario activo."""
-    try:
-        with scorecard.db_connection(db_config) as conn:
-            cursor = conn.cursor()
-            q = ("SELECT username, role, must_change_password, centro_asignado FROM users WHERE LOWER(username) = %s AND active = 1"
-                 if db_config['type'] == 'postgresql' else
-                 "SELECT username, role, must_change_password, centro_asignado FROM users WHERE LOWER(username) = ? AND active = 1")
-            cursor.execute(q, (username.strip().lower(),))
-            row = cursor.fetchone()
-        if not row:
-            return None
-        return {"name": row[0], "role": row[1], "must_change_password": bool(row[2]), "centro_asignado": row[3]}
-    except Exception as e:
-        _log.warning(f"get_user_data error: {e}")
-        return None
+    _, user_dict = _get_user_credentials(username, db_config)
+    return user_dict
 
 
 def update_user_password(username: str, new_hash: str, db_config: dict) -> bool:
@@ -818,10 +808,9 @@ def check_login() -> bool:
                             _log.warning(f"[RATE LIMIT] Intento bloqueado para '{uname}' ({remaining}s restantes)")
                             return False
 
-                        # ── Verificar credenciales ──────────────────────────
-                        pw_hash = get_user_password_hash(uname, db_config)
+                        # ── Verificar credenciales (1 sola query DB) ───────
+                        pw_hash, user_info = _get_user_credentials(uname, db_config)
                         if pw_hash and scorecard.verify_password(password, pw_hash):
-                            user_info = get_user_data(uname, db_config)
                             scorecard.record_login_attempt(uname, success=True, db_config=db_config)
                             st.session_state["user"] = user_info
                             st.session_state["last_activity"] = datetime.now()
@@ -854,11 +843,20 @@ def check_login() -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# INICIALIZACIÓN DE BASE DE DATOS
+# INICIALIZACIÓN DE BASE DE DATOS — una sola vez por proceso
 # ─────────────────────────────────────────────────────────────────────────────
-db_config = get_db_config()
+@st.cache_resource
+def _init_app() -> dict:
+    """
+    Ejecutado UNA SOLA VEZ por proceso (no en cada re-render).
+    Inicializa la BD y devuelve la config para que el resto de la app la use.
+    """
+    cfg = get_db_config()
+    scorecard.init_database(cfg)
+    return cfg
+
+db_config = _init_app()
 _DB_KEY   = db_config_key(db_config)
-scorecard.init_database(db_config)
 
 if not check_login():
     st.stop()
@@ -1310,14 +1308,17 @@ if tab_proc:
         if uploaded_files:
             batches = {}
             for f in uploaded_files:
-                week, center = scorecard.extract_info_from_path(f.name)
+                week, center, _year_file = scorecard.extract_info_from_path(f.name)
                 bk = (week, center)
                 if bk not in batches:
                     batches[bk] = {
                         'concessions': [], 'dsc_concessions': [], 'quality': [], 'false_scan': [],
                         'dwc': [], 'fdps': [], 'daily': [], 'official': [],
-                        'files_count': 0
+                        'files_count': 0,
+                        'year': _year_file,
                     }
+                elif _year_file and not batches[bk].get('year'):
+                    batches[bk]['year'] = _year_file
                 name = f.name.lower()
                 if re.match(scorecard.Config.PATTERN_DSC_CONCESSIONS, name, re.IGNORECASE):
                     batches[bk]['dsc_concessions'].append(f)
@@ -1408,7 +1409,8 @@ if tab_proc:
                                     ok = scorecard.save_to_database(
                                         df, current_week, current_center,
                                         db_config=db_config,
-                                        uploaded_by=user_data_session['name']
+                                        uploaded_by=user_data_session['name'],
+                                        year=data.get('year'),
                                     )
                                     # Invalidar solo el caché relacionado con este lote
                                     # (no borramos todo para no perjudicar a usuarios concurrentes)
@@ -1512,15 +1514,17 @@ if tab_proc:
                                 if not files_in_folder:
                                     continue
 
-                                # Detectar semana/centro desde la carpeta o los archivos
+                                # Detectar semana/centro/año desde la carpeta o los archivos
                                 folder_name = folder.name
-                                week_f, center_f = scorecard.extract_info_from_path(folder_name)
+                                week_f, center_f, year_f = scorecard.extract_info_from_path(folder_name)
                                 if week_f == 'N/A':
                                     # Intentar desde algún archivo dentro
                                     for ff in files_in_folder:
-                                        ww, cc = scorecard.extract_info_from_path(ff.name)
+                                        ww, cc, yy = scorecard.extract_info_from_path(ff.name)
                                         if ww != 'N/A':
                                             week_f, center_f = ww, cc
+                                            if yy and not year_f:
+                                                year_f = yy
                                             break
 
                                 # Clasificar archivos
@@ -1567,7 +1571,8 @@ if tab_proc:
                                     ok_b = scorecard.save_to_database(
                                         df_bulk, week_f, center_f,
                                         db_config=db_config,
-                                        uploaded_by=f"{user_data_session['name']} (bulk)"
+                                        uploaded_by=f"{user_data_session['name']} (bulk)",
+                                        year=year_f,
                                     )
                                     status = "✅" if ok_b else "⚠️"
                                     results_bulk.append(
@@ -1668,14 +1673,16 @@ if tab_dsp:
                     for _i, _p in enumerate(_ok_parsed):
                         _m = _p['meta']
                         _s = _p['station']
-                        _c, _w = _m['centro'], _m['semana']
+                        _c, _w, _yr = _m['centro'], _m['semana'], _m.get('year')
                         try:
                             _ok_st = scorecard.save_station_scorecard(
-                                _s, _w, _c, db_config, user_data_session['name'])
+                                _s, _w, _c, db_config, user_data_session['name'],
+                                year=_yr)
                             _n_upd, _n_miss = scorecard.update_drivers_from_pdf(
                                 _p['drivers'], _w, _c, db_config)
                             _ok_wh = scorecard.save_wh_exceptions(
-                                _p['wh'], _w, _c, db_config, user_data_session['name'])
+                                _p['wh'], _w, _c, db_config, user_data_session['name'],
+                                year=_yr)
                             _audit(f"Guardó PDF DSP {_c} {_w}")
                             _save_results.append(
                                 f"✅ **{_c} {_w}** — {_n_upd} drivers · "
@@ -2722,18 +2729,38 @@ with tab_hist:
                                     )
             # ── Si no se pulsó Buscar pero hay resultados previos: redibujar ─
             elif st.session_state.get("_hist_df") is not None:
-                df_filtered = st.session_state["_hist_df"]
-                page      = st.session_state.get("hist_page", 0)
-                PAGE_SIZE = 200
-                total_rows = st.session_state.get('_hist_total_rows', len(df_filtered))
+                page       = st.session_state.get("hist_page", 0)
+                PAGE_SIZE  = 200
+                total_rows = st.session_state.get('_hist_total_rows', 0)
                 total_pages = max(1, (total_rows + PAGE_SIZE - 1) // PAGE_SIZE)
+                page   = min(page, total_pages - 1)
                 offset = page * PAGE_SIZE
-                df_page_hist = df_filtered.iloc[offset:offset+PAGE_SIZE]
+
+                _where_sql_cached = st.session_state.get('_hist_where_sql', '')
+                _params_cached    = st.session_state.get('_hist_params', [])
+                _q_page = f"""
+                    SELECT semana, centro, driver_name AS conductor, driver_id AS id,
+                           calificacion, score, dnr, dcr, pod, cc, detalles
+                    FROM scorecards {_where_sql_cached}
+                    ORDER BY fecha_semana DESC, semana DESC, score DESC
+                    LIMIT {PAGE_SIZE} OFFSET {offset}
+                """
+                with scorecard.db_connection(db_config) as _conn_p:
+                    df_page_hist = pd.read_sql_query(
+                        _q_page, _conn_p,
+                        params=_params_cached if _params_cached else None
+                    )
+                for _c, _p in [('dcr','dcr_pct'),('pod','pod_pct'),('cc','cc_pct')]:
+                    if _c in df_page_hist.columns:
+                        df_page_hist[_p] = (df_page_hist[_c] * 100).round(2)
+                st.session_state['_hist_df'] = df_page_hist
+
+                _ref = df_page_hist
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Total", f"{total_rows:,}")
-                c2.metric('DNR medio',   f"{df_filtered['dnr'].mean():.2f}")
-                c3.metric('Score medio', f"{df_filtered['score'].mean():.1f}")
-                c4.metric('DCR medio',   f"{(df_filtered['dcr_pct'].mean() if 'dcr_pct' in df_filtered.columns else 0):.2f}%")
+                c2.metric('DNR medio',   f"{_ref['dnr'].mean():.2f}")
+                c3.metric('Score medio', f"{_ref['score'].mean():.1f}")
+                c4.metric('DCR medio',   f"{(_ref['dcr_pct'].mean() if 'dcr_pct' in _ref.columns else 0):.2f}%")
                 st.divider()
                 _render_pagination(
                     'hist_page', page, total_pages, total_rows, PAGE_SIZE,

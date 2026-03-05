@@ -16,6 +16,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.formatting.rule import ColorScaleRule
 import warnings
 import logging
+import functools
 from typing import Dict, List, Tuple, Optional
 from contextlib import contextmanager
 import re
@@ -33,24 +34,28 @@ except ImportError:
     pass  # psycopg2 no instalado — modo SQLite activo
 
 # ── Pool de conexiones PostgreSQL (reutiliza conexiones entre queries) ────────
+import threading as _threading
 _PG_POOL: "pg_pool.ThreadedConnectionPool | None" = None
+_PG_POOL_LOCK = _threading.Lock()
 
 def _get_pg_pool(db_config: dict):
     """
     Devuelve (o crea) un ThreadedConnectionPool para Supabase.
     minconn=1, maxconn=5 — apropiado para 10-30 usuarios con Streamlit Cloud.
+    Lock para evitar race condition si dos threads llegan simultáneamente.
     """
     global _PG_POOL
-    if _PG_POOL is None or _PG_POOL.closed:
-        _PG_POOL = pg_pool.ThreadedConnectionPool(
-            minconn=1, maxconn=5,
-            host=db_config.get('host', 'localhost'),
-            database=db_config.get('database', 'postgres'),
-            user=db_config.get('user', 'postgres'),
-            password=db_config.get('password', ''),
-            port=db_config.get('port', 5432),
-            connect_timeout=10,
-        )
+    with _PG_POOL_LOCK:
+        if _PG_POOL is None or _PG_POOL.closed:
+            _PG_POOL = pg_pool.ThreadedConnectionPool(
+                minconn=1, maxconn=5,
+                host=db_config.get('host', 'localhost'),
+                database=db_config.get('database', 'postgres'),
+                user=db_config.get('user', 'postgres'),
+                password=db_config.get('password', ''),
+                port=db_config.get('port', 5432),
+                connect_timeout=10,
+            )
     return _PG_POOL
 HAS_BCRYPT = False
 try:
@@ -68,14 +73,12 @@ except Exception:
 
 from datetime import datetime, timedelta
 
-# Configurar logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
+if not logger.handlers:
+    logger.setLevel(logging.INFO)
 
-warnings.filterwarnings('ignore')
+warnings.filterwarnings('ignore', category=pd.errors.DtypeWarning)
+warnings.filterwarnings('ignore', message='.*openpyxl.*')
 
 class Config:
     """Configuración centralizada del sistema"""
@@ -173,19 +176,11 @@ def clean_id(val) -> str:
         return "UNKNOWN"
     return str(val).strip().upper()
 
+_INVALID_SHEET_RE = re.compile(r'[/\\?*\[\]:]')
+
 def truncate_sheet_name(name: str, max_length: int = 31) -> str:
-    """Trunca nombre de hoja Excel a máximo permitido"""
-    # Eliminar caracteres no permitidos en nombres de hoja
-    invalid_chars = ['/', '\\', '?', '*', '[', ']', ':']
-    clean_name = name
-    for char in invalid_chars:
-        clean_name = clean_name.replace(char, '_')
-    
-    # Truncar si es necesario
-    if len(clean_name) > max_length:
-        clean_name = clean_name[:max_length]
-    
-    return clean_name
+    """Trunca nombre de hoja Excel a máximo permitido eliminando caracteres inválidos."""
+    return _INVALID_SHEET_RE.sub('_', name)[:max_length]
 
 def validate_dataframe(df: pd.DataFrame, required_cols: List[str], 
                       name: str) -> Tuple[bool, str]:
@@ -287,41 +282,58 @@ def read_html_safe(filepath_or_buffer) -> Optional[pd.DataFrame]:
         return None
 
 def read_excel_safe(filepath_or_buffer) -> Optional[pd.DataFrame]:
-    """Lee Excel buscando header dinámicamente en todas las hojas (soporta paths o buffers)"""
+    """Lee Excel buscando header dinámicamente en todas las hojas (soporta paths o buffers).
+    
+    Optimizado: lee cada hoja UNA sola vez con header=None y busca la fila de cabecera
+    iterando sobre las filas ya en memoria en vez de re-parsear el fichero 25 veces.
+    """
+    _ID_KEYS      = {'id', 'agente', 'driver', 'transporter'}
+    _METRIC_KEYS  = {'dnr', 'concessions', 'delivered', 'rts', 'quality', 'score'}
+    _SKIP_WORDS   = {'by', 'report'}
+    MAX_HEADER_SCAN = 25
+
+    def _is_valid_header(row_values) -> bool:
+        cols = [str(v).strip().lower() for v in row_values if pd.notna(v)]
+        if not cols:
+            return False
+        unnamed_count = sum(1 for c in cols if 'unnamed' in c)
+        if unnamed_count > len(cols) * 0.5 and len(cols) > 2:
+            return False
+        has_id = any(
+            any(k in c for k in _ID_KEYS) and not any(w in c for w in _SKIP_WORDS)
+            for c in cols
+        )
+        has_metrics = any(k in c for k in _METRIC_KEYS for c in cols)
+        return has_id and has_metrics
+
     try:
         if hasattr(filepath_or_buffer, 'seek'):
             filepath_or_buffer.seek(0)
-            
+
         xl = pd.ExcelFile(filepath_or_buffer, engine='openpyxl')
         sheets = xl.sheet_names
-        
-        # Priorizar hojas que suelen tener los datos resumidos por transportista
+
         priority_sheets = ['DNR by Transporter ID', 'DSC by Transporter ID', 'DNR Concessions', 'Sheet1', 'Feuille1', 'Hoja1']
         sorted_sheets = [s for s in priority_sheets if s in sheets] + [s for s in sheets if s not in priority_sheets]
-        
-        for sheet in sorted_sheets:
-            for skip in range(25):
-                try:
-                    df = pd.read_excel(xl, sheet_name=sheet, skiprows=skip)
-                    if df is None or df.empty: continue
-                    
-                    df.columns = [str(c).strip() for c in df.columns]
-                    cols = [c.lower() for c in df.columns]
-                    unnamed_count = sum(1 for c in cols if 'unnamed' in c)
-                    
-                    # Si hay demasiadas columnas Unnamed, probablemente no es el header real
-                    if unnamed_count > len(cols) * 0.5 and len(cols) > 2:
-                        continue
 
-                    # Para aceptar una hoja, necesitamos al menos una columna de ID y algo de métricas
-                    has_id = any(('id' in c or 'agente' in c or 'driver' in c or 'transporter' in c) and 'by' not in c and 'report' not in c for c in cols)
-                    has_metrics = any(k in col for k in ['dnr', 'concessions', 'delivered', 'rts', 'quality', 'score'] for col in cols)
-                    
-                    if has_id and has_metrics:
-                        logger.info(f"✓ Header detectado en hoja '{sheet}', fila {skip}")
-                        return df
-                except Exception:
+        for sheet in sorted_sheets:
+            try:
+                raw = pd.read_excel(xl, sheet_name=sheet, header=None, nrows=MAX_HEADER_SCAN + 50)
+                if raw is None or raw.empty:
                     continue
+                header_row = None
+                for i in range(min(MAX_HEADER_SCAN, len(raw))):
+                    if _is_valid_header(raw.iloc[i].tolist()):
+                        header_row = i
+                        break
+                if header_row is None:
+                    continue
+                df = pd.read_excel(xl, sheet_name=sheet, skiprows=header_row)
+                df.columns = [str(c).strip() for c in df.columns]
+                logger.info(f"✓ Header detectado en hoja '{sheet}', fila {header_row}")
+                return df
+            except Exception:
+                continue
         return None
     except Exception as e:
         logger.error(f"Error leyendo Excel: {str(e)}")
@@ -466,8 +478,6 @@ def process_concessions(df: pd.DataFrame) -> pd.DataFrame:
     # --- LÓGICA DE AGRUPACIÓN INTELIGENTE CON ANTI-DUPLICACIÓN (CORREGIDA) ---
     logger.info(f"  -> Procesando {len(df)} registros de Concessions...")
     
-    # ⭐ PARCHE CRÍTICO: Eliminar duplicados ANTES de agrupar
-    # Esto previene que archivos duplicados multipliquen los DNRs
     original_count = len(df)
     df = df.drop_duplicates(subset=['ID'], keep='first')
     duplicates_removed = original_count - len(df)
@@ -476,22 +486,11 @@ def process_concessions(df: pd.DataFrame) -> pd.DataFrame:
         logger.warning(f"  ⚠️ Se eliminaron {duplicates_removed} registros duplicados del mismo conductor")
     
     logger.info(f"  -> {len(df)} conductores únicos encontrados")
-    
-    # Ahora agrupamos por ID (esto es útil solo si hay datos diarios)
-    # Si los datos ya vienen consolidados semanalmente, la agrupación no cambia nada
-    df_agg = df.groupby('ID').agg({
-        'Nombre': 'first',
-        'DNR': 'sum',
-        'RTS': 'mean',
-        'Entregados': 'sum'
-    }).reset_index()
-    
-    # Cap de seguridad: limitar DNR al máximo configurado
-    # Nota: Con el drop_duplicates previo, ya no necesitamos lógica compleja
-    df_agg['DNR'] = df_agg['DNR'].apply(lambda x: min(x, Config.MAX_DNR))
-    
-    logger.info(f"✓ Concessions procesado: {len(df_agg)} conductores")
-    return df_agg[['ID', 'Nombre', 'DNR', 'RTS', 'Entregados']]
+
+    df['DNR'] = pd.to_numeric(df['DNR'], errors='coerce').fillna(0.0).clip(upper=Config.MAX_DNR)
+
+    logger.info(f"✓ Concessions procesado: {len(df)} conductores")
+    return df[['ID', 'Nombre', 'DNR', 'RTS', 'Entregados']]
 
 def process_quality(df: pd.DataFrame) -> pd.DataFrame:
     """Procesa archivo Quality Overview con validaciones robustas"""
@@ -742,59 +741,52 @@ def merge_data_smart(df_concessions: pd.DataFrame,
         }).reset_index()
         
         # Recalcular RTS real (total devueltos / total entregados)
-        daily_agg['RTS'] = daily_agg.apply(
-            lambda x: x['rts_count'] / x['Entregados'] if x['Entregados'] > 0 else 0.0, axis=1
-        )
-        
+        ent_d = daily_agg['Entregados']
+        daily_agg['RTS'] = np.where(ent_d > 0, daily_agg['rts_count'] / ent_d, 0.0)
+
         df_base = df_base.merge(daily_agg, on='ID', how='left', suffixes=('', '_daily'))
-        
+
         matched = df_base['Entregados_daily'].notna().sum()
         logger.info(f"  + Daily Report: {matched}/{len(df_base)} conductores emparejados")
-        
-        # Complementar métricas si faltan o son 0
-        df_base['DNR'] = df_base.apply(
-            lambda x: max(x['DNR'], x.get('DNR_daily', 0)) if not pd.isna(x.get('DNR_daily')) else x['DNR'], axis=1
-        )
-        
-        # Corregir Entregados si en concessions era 0 pero en daily hay datos
-        if 'Entregados_daily' in df_base.columns:
-            df_base['Entregados'] = df_base.apply(
-                lambda x: x['Entregados_daily'] if (pd.isna(x['Entregados']) or x['Entregados'] == 0) else x['Entregados'], axis=1
-            )
-        
-        if 'RTS_daily' in df_base.columns:
-            df_base['RTS'] = df_base.apply(
-                lambda x: x['RTS_daily'] if pd.isna(x['RTS']) or x['RTS'] == 0 else x['RTS'], axis=1
-            )
-        
-        # Calcular POD/CC aproximado si no vienen en Quality pero hay daily
-        if 'Entregados_daily' in df_base.columns:
-            if 'POD' not in df_base.columns: df_base['POD'] = np.nan
-            if 'CC' not in df_base.columns: df_base['CC'] = np.nan
-            
-            def calc_metric(entregados, fails):
-                if pd.isna(entregados) or entregados <= 0: return np.nan
-                return max(0.0, min(1.0, 1.0 - (fails / entregados)))
 
-            df_base['POD'] = df_base.apply(
-                lambda x: calc_metric(x['Entregados_daily'], x['POD_Fails']) if pd.isna(x.get('POD')) or x.get('POD') == 1.0 else x['POD'], axis=1
+        if 'DNR_daily' in df_base.columns:
+            dnr_d = pd.to_numeric(df_base['DNR_daily'], errors='coerce')
+            df_base['DNR'] = np.where(
+                dnr_d.notna(),
+                np.maximum(pd.to_numeric(df_base['DNR'], errors='coerce').fillna(0), dnr_d.fillna(0)),
+                df_base['DNR']
             )
-            df_base['CC'] = df_base.apply(
-                lambda x: calc_metric(x['Entregados_daily'], x['CC_Fails']) if pd.isna(x.get('CC')) or x.get('CC') == 1.0 else x['CC'], axis=1
-            )
+
+        if 'Entregados_daily' in df_base.columns:
+            mask_e = df_base['Entregados'].isna() | (df_base['Entregados'] == 0)
+            df_base['Entregados'] = np.where(mask_e, df_base['Entregados_daily'], df_base['Entregados'])
+
+        if 'RTS_daily' in df_base.columns:
+            mask_r = df_base['RTS'].isna() | (df_base['RTS'] == 0)
+            df_base['RTS'] = np.where(mask_r, df_base['RTS_daily'], df_base['RTS'])
+
+        if 'Entregados_daily' in df_base.columns:
+            if 'POD' not in df_base.columns:
+                df_base['POD'] = np.nan
+            if 'CC' not in df_base.columns:
+                df_base['CC'] = np.nan
+
+            ent_col = pd.to_numeric(df_base['Entregados_daily'], errors='coerce')
+            for _metric, _fails in [('POD', 'POD_Fails'), ('CC', 'CC_Fails')]:
+                if _fails in df_base.columns:
+                    _calc = (1.0 - pd.to_numeric(df_base[_fails], errors='coerce') / ent_col).clip(0.0, 1.0)
+                    _calc = np.where(ent_col > 0, _calc, np.nan)
+                    _mask = df_base[_metric].isna() | (df_base[_metric] == 1.0)
+                    df_base[_metric] = np.where(_mask, _calc, df_base[_metric])
             
-    # Rellenar NaN con valores por defecto para métricas core
     for col in ['DCR', 'POD', 'CC', 'CDF', 'FDPS', 'RTS', 'IADC']:
+        default_val = getattr(Config, f'DEFAULT_{col}', 1.0 if col != 'RTS' else 0.0)
         if col in df_base.columns:
-            # Asegurar que son porcentajes 0-1
-            df_base[col] = df_base[col].apply(lambda x: max(0.0, min(float(x), 1.0)) if not pd.isna(x) else np.nan)
-            default_val = getattr(Config, f'DEFAULT_{col}', 1.0 if col != 'RTS' else 0.0)
-            df_base[col] = df_base[col].fillna(default_val)
+            df_base[col] = pd.to_numeric(df_base[col], errors='coerce').clip(0.0, 1.0).fillna(default_val)
         else:
-            df_base[col] = getattr(Config, f'DEFAULT_{col}', 1.0 if col != 'RTS' else 0.0)
-    
-    # Cap final de DNR
-    df_base['DNR'] = df_base['DNR'].apply(lambda x: min(x, Config.MAX_DNR))
+            df_base[col] = default_val
+
+    df_base['DNR'] = pd.to_numeric(df_base['DNR'], errors='coerce').fillna(0.0).clip(upper=Config.MAX_DNR)
     
     # Merge con False Scan
     if df_false_scan is not None and not df_false_scan.empty:
@@ -966,10 +958,10 @@ def calculate_score_v3_robust(row: pd.Series, targets: Optional[Dict] = None) ->
 # GENERACIÓN DE EXCEL
 # ═══════════════════════════════════════════════════════════════
 
-def extract_info_from_path(path: str) -> Tuple[str, str]:
-    """Extrae semana y centro del nombre del archivo con normalización inteligente"""
+def extract_info_from_path(path: str) -> Tuple[str, str, Optional[int]]:
+    """Extrae semana, centro y año del nombre del archivo con normalización inteligente"""
     if not path:
-        return "N/A", "TDSL"
+        return "N/A", "TDSL", None
     
     filename = os.path.basename(path)
     
@@ -1020,8 +1012,16 @@ def extract_info_from_path(path: str) -> Tuple[str, str]:
         # Buscar en el path si no está en el filename
         center_match_path = re.search(r'([A-Z]{3,4}\d)', path, re.IGNORECASE)
         center = center_match_path.group(1).upper() if center_match_path else "TDSL"
-    
-    return week, center
+
+    # 3. Extraer año si está explícito en el nombre (ej: 2025, 2026...)
+    year_extracted: Optional[int] = None
+    year_match = re.search(r'\b(20\d{2})\b', filename)
+    if not year_match:
+        year_match = re.search(r'\b(20\d{2})\b', path)
+    if year_match:
+        year_extracted = int(year_match.group(1))
+
+    return week, center, year_extracted
 
 def create_professional_excel(df: pd.DataFrame, output_path: str, 
                               center_name: str = "TDSL", week: str = "N/A") -> bool:
@@ -1337,9 +1337,6 @@ def process_single_batch(path_concessions, path_quality=None, path_false_scan=No
             return None
             
         df_conc_clean = process_concessions(df_concessions)
-        if df_conc_clean is not None and not df_conc_clean.empty and 'ID' in df_conc_clean.columns:
-            if df_conc_clean['ID'].duplicated().any():
-                df_conc_clean = df_conc_clean.drop_duplicates(subset='ID', keep='first')
         
         df_qual_clean = process_quality(df_quality) if df_quality is not None and not df_quality.empty else None
         df_fs_clean = process_false_scan(df_false_scan_html) if df_false_scan_html is not None and not df_false_scan_html.empty else None
@@ -1349,13 +1346,10 @@ def process_single_batch(path_concessions, path_quality=None, path_false_scan=No
         
         df_merged = merge_data_smart(df_conc_clean, df_qual_clean, df_fs_clean, df_dwc_clean, df_fdps_clean, df_daily_clean)
         
-        # --- LIMPIEZA FINAL DE SEGURIDAD (ANTI-EXPLOSIÓN) ---
         if 'DNR' in df_merged.columns:
-            # Forzamos que el DNR nunca supere el límite, evitando IDs de Amazon en el Excel
-            df_merged['DNR'] = df_merged['DNR'].apply(lambda x: min(float(x), Config.MAX_DNR) if not pd.isna(x) else 0.0)
-        
+            df_merged['DNR'] = pd.to_numeric(df_merged['DNR'], errors='coerce').fillna(0.0).clip(upper=Config.MAX_DNR)
         if 'FS_Count' in df_merged.columns:
-            df_merged['FS_Count'] = df_merged['FS_Count'].apply(lambda x: min(float(x), Config.MAX_FALSE_SCAN) if not pd.isna(x) else 0.0)
+            df_merged['FS_Count'] = pd.to_numeric(df_merged['FS_Count'], errors='coerce').fillna(0.0).clip(upper=Config.MAX_FALSE_SCAN)
 
         # Eliminar duplicados finales por si acaso
         if 'ID' in df_merged.columns:
@@ -1475,18 +1469,15 @@ def verify_password(password: str, hashed: str) -> bool:
     """
     try:
         if hashed.startswith('bcrypt:'):
-            # Hash bcrypt
             if HAS_BCRYPT:
-                hash_only = hashed.replace('bcrypt:', '')
-                return bcrypt.checkpw(password.encode('utf-8'), hash_only.encode('utf-8'))
-            else:
-                logger.error("Hash es bcrypt pero biblioteca no está instalada")
-                return False
+                return bcrypt.checkpw(
+                    password.encode('utf-8'),
+                    hashed.removeprefix('bcrypt:').encode('utf-8')
+                )
+            logger.error("Hash es bcrypt pero biblioteca no está instalada")
+            return False
         elif hashed.startswith('sha256:'):
-            # Hash SHA-256
-            hash_only = hashed.replace('sha256:', '')
-            test_hash = hashlib.sha256(password.encode()).hexdigest()
-            return test_hash == hash_only
+            return hashlib.sha256(password.encode()).hexdigest() == hashed.removeprefix('sha256:')
         else:
             # Compatibilidad con hashes antiguos sin prefijo (asumimos SHA-256)
             test_hash = hashlib.sha256(password.encode()).hexdigest()
@@ -2012,6 +2003,7 @@ def reset_production_database(db_config: Optional[Dict] = None):
         return False
 
 
+@functools.lru_cache(maxsize=128)
 def week_to_date(week_str: str, year: int = None) -> str:
     """Convierte un string de semana 'W05' a la fecha del lunes de esa semana"""
     try:
@@ -2045,7 +2037,9 @@ def week_to_date(week_str: str, year: int = None) -> str:
     except (ValueError, TypeError, AttributeError):
         return datetime.now().strftime("%Y-%m-%d")
 
-def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Optional[Dict] = None, uploaded_by: str = "System", clean_first: bool = True) -> bool:
+def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Optional[Dict] = None,
+                     uploaded_by: str = "System", clean_first: bool = True,
+                     year: Optional[int] = None) -> bool:
     """Guarda o actualiza los datos en la base de datos (SQLite o PostgreSQL)"""
     try:
         # Normalizar semana: W5 → W05, W9 → W09 (evita inconsistencias en ORDER BY y filtros)
@@ -2060,7 +2054,7 @@ def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Option
 
         is_postgres = db_config and db_config.get('type') == 'postgresql'
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        date_week = week_to_date(week)
+        date_week = week_to_date(week, year=year)
 
         cols = [
             "semana", "fecha_semana", "anio", "centro", "driver_id", "driver_name", "calificacion", "score",
@@ -2647,7 +2641,8 @@ def parse_dsp_scorecard_pdf(pdf_bytes: bytes) -> dict:
 
 
 def save_station_scorecard(station_data: dict, week: str, center: str,
-                           db_config=None, uploaded_by: str = "System") -> bool:
+                           db_config=None, uploaded_by: str = "System",
+                           year: Optional[int] = None) -> bool:
     """
     Guarda o actualiza los KPIs de estación en station_scorecards.
     UPSERT por (semana, centro) — reemplaza si ya existe.
@@ -2655,7 +2650,7 @@ def save_station_scorecard(station_data: dict, week: str, center: str,
     try:
         is_pg  = db_config and db_config.get('type') == 'postgresql'
         ph     = '%s' if is_pg else '?'
-        fecha  = week_to_date(week)
+        fecha  = week_to_date(week, year=year)
 
         fields = [
             'semana', 'fecha_semana', 'centro',
@@ -2749,7 +2744,7 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
             ph      = '%s' if is_pg else '?'
 
             # ── Obtener driver_ids existentes de una sola query ───────────
-            all_ids = [str(r['driver_id']) for _, r in drivers_df.iterrows()]
+            all_ids = drivers_df['driver_id'].astype(str).tolist()
             phs = ", ".join([ph] * len(all_ids))
             cursor.execute(
                 f"SELECT driver_id FROM scorecards "
@@ -2761,18 +2756,17 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
             not_found = [did for did in all_ids if did not in existing_ids]
 
             # ── Batch UPDATE para los que sí existen ─────────────────────
-            update_vals = []
-            for _, row in drivers_df.iterrows():
-                driver_id = str(row['driver_id'])
-                if driver_id not in existing_ids:
-                    continue
-                update_vals.append((
+            update_vals = [
+                (
                     row.get('entregados_oficial'), row.get('dcr_oficial'),
                     row.get('pod_oficial'),        row.get('cc_oficial'),
                     row.get('dsc_dpmo'),           row.get('lor_dpmo'),
                     row.get('ce_dpmo'),            row.get('cdf_dpmo_oficial'),
-                    week, center, driver_id
-                ))
+                    week, center, str(row['driver_id'])
+                )
+                for _, row in drivers_df.iterrows()
+                if str(row['driver_id']) in existing_ids
+            ]
 
             if update_vals:
                 q_update = f"""
@@ -2806,7 +2800,8 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
 
 
 def save_wh_exceptions(wh_df: pd.DataFrame, week: str, center: str,
-                       db_config=None, uploaded_by: str = "System") -> bool:
+                       db_config=None, uploaded_by: str = "System",
+                       year: Optional[int] = None) -> bool:
     """
     Guarda las excepciones de Working Hours en wh_exceptions.
     Primero borra las del mismo centro+semana para evitar duplicados,
@@ -2823,7 +2818,7 @@ def save_wh_exceptions(wh_df: pd.DataFrame, week: str, center: str,
             cursor = conn.cursor()
             is_pg  = db_config and db_config.get('type') == 'postgresql'
             ph     = '%s' if is_pg else '?'
-            fecha  = week_to_date(week)
+            fecha  = week_to_date(week, year=year)
 
             # ── Lookup driver_name desde scorecards (misma semana y centro) ──
             driver_ids = wh_df['driver_id'].astype(str).tolist()
@@ -2841,24 +2836,27 @@ def save_wh_exceptions(wh_df: pd.DataFrame, week: str, center: str,
             )
             anio_wh = int(fecha[:4]) if fecha else None
 
-            for _, row in wh_df.iterrows():
-                did = str(row['driver_id'])
-                cursor.execute(
-                    f"""INSERT INTO wh_exceptions
-                        (semana, fecha_semana, anio, centro, driver_id, driver_name,
-                         daily_limit_exceeded, weekly_limit_exceeded,
-                         under_offwork_limit, workday_limit_exceeded, uploaded_by)
-                        VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})
-                    """,
-                    (
-                        week, fecha, anio_wh, center, did, name_map.get(did),
-                        int(row.get('daily_limit_exceeded', 0)),
-                        int(row.get('weekly_limit_exceeded', 0)),
-                        int(row.get('under_offwork_limit', 0)),
-                        int(row.get('workday_limit_exceeded', 0)),
-                        uploaded_by
-                    )
+            wh_vals = [
+                (
+                    week, fecha, anio_wh, center,
+                    str(row['driver_id']), name_map.get(str(row['driver_id'])),
+                    int(row.get('daily_limit_exceeded', 0)),
+                    int(row.get('weekly_limit_exceeded', 0)),
+                    int(row.get('under_offwork_limit', 0)),
+                    int(row.get('workday_limit_exceeded', 0)),
+                    uploaded_by
                 )
+                for _, row in wh_df.iterrows()
+            ]
+            cursor.executemany(
+                f"""INSERT INTO wh_exceptions
+                    (semana, fecha_semana, anio, centro, driver_id, driver_name,
+                     daily_limit_exceeded, weekly_limit_exceeded,
+                     under_offwork_limit, workday_limit_exceeded, uploaded_by)
+                    VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})
+                """,
+                wh_vals
+            )
             conn.commit()
         n_named = sum(1 for r in wh_df['driver_id'] if str(r) in name_map)
         logger.info(f"✓ WHC exceptions guardadas: {len(wh_df)} para {center} {week} "
