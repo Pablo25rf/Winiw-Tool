@@ -1191,12 +1191,14 @@ if tab_dsp:
                 station = parsed['station']
                 centro  = meta['centro']
                 semana  = meta['semana']
+                year    = meta.get('year', '')
+                semana_label = f"{semana}/{year}" if year else semana
 
                 tier_color = {'Fantastic': '🟢', 'Great': '🔵', 'Fair': '🟡', 'Poor': '🔴'}
                 overall_icon = tier_color.get(station.get('overall_standing', ''), '⚪')
 
                 with st.expander(
-                    f"{overall_icon} {centro} — {semana} | Score: {station.get('overall_score')} "
+                    f"{overall_icon} {centro} — {semana_label} | Score: {station.get('overall_score')} "
                     f"({station.get('overall_standing')}) | Rank: #{station.get('rank_station')}",
                     expanded=True
                 ):
