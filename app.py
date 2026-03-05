@@ -1747,8 +1747,19 @@ if tab_dsp:
                 centros_disp = sorted(df_ss['centro'].unique())
                 sel_centros  = st.multiselect("Filtrar por Centro", centros_disp, default=centros_disp)
                 df_filtrado  = df_ss[df_ss['centro'].isin(sel_centros)] if sel_centros else df_ss
-                cols_show = [c for c in [
-                    'semana', 'centro', 'overall_score', 'overall_standing', 'rank_station', 'rank_wow',
+                # Columna semana/año combinada: "W09/2026"
+                if 'anio' in df_filtrado.columns:
+                    df_filtrado = df_filtrado.copy()
+                    df_filtrado['semana_año'] = df_filtrado.apply(
+                        lambda r: f"{r['semana']}/{int(r['anio'])}" if pd.notna(r.get('anio')) and r.get('anio') else r['semana'],
+                        axis=1
+                    )
+                    _semana_col = 'semana_año'
+                else:
+                    _semana_col = 'semana'
+
+                cols_show = [_semana_col] + [c for c in [
+                    'centro', 'overall_score', 'overall_standing', 'rank_station', 'rank_wow',
                     'wh_count', 'whc_pct', 'whc_tier',
                     'dcr_pct', 'dcr_tier', 'dnr_dpmo', 'dnr_tier', 'lor_dpmo', 'lor_tier',
                     'pod_pct', 'pod_tier', 'fico', 'fico_tier',
@@ -1760,7 +1771,7 @@ if tab_dsp:
                     hide_index=True,
                     height=400,
                     column_config={
-                        'semana':           st.column_config.TextColumn('Semana', width='small'),
+                        _semana_col:        st.column_config.TextColumn('Semana', width='small'),
                         'centro':           st.column_config.TextColumn('Centro', width='small'),
                         'overall_score':    st.column_config.NumberColumn('Score', format='%.2f', width='small'),
                         'overall_standing': st.column_config.TextColumn('Standing', width='small'),
