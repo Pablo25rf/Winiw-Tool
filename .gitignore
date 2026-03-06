@@ -55,3 +55,6 @@ exports/
 *.xlsx
 *.csv
 !requirements.txt
+
+# ── PDFs de muestra / datos (no son código) ──────────────────────────────────
+*.pdf

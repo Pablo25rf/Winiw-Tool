@@ -1630,7 +1630,31 @@ if tab_dsp:
                 st.session_state['_dsp_all_parsed'] = _all_parsed
 
             _all_parsed = st.session_state.get('_dsp_all_parsed', [])
-            _tier_color = {'Fantastic': '🟢', 'Great': '🔵', 'Fair': '🟡', 'Poor': '🔴'}
+            _tier_color = {'Fantastic': '🔵', 'Great': '🟢', 'Fair': '🟠', 'Poor': '🔴'}
+            _AMAZON_COLORS = {
+                'Fantastic': '#0F6CBD',
+                'Great':     '#067D50',
+                'Fair':      '#FF9900',
+                'Poor':      '#CC0000',
+            }
+
+            def _amz_badge(tier: str) -> str:
+                c = _AMAZON_COLORS.get(tier, '#6c757d')
+                return (f'<span style="background:{c};color:#fff;padding:2px 8px;'
+                        f'border-radius:3px;font-size:.78em;font-weight:600">{tier or "—"}</span>')
+
+            def _block_hdr(icon: str, title: str, tier: str | None = None) -> str:
+                c = _AMAZON_COLORS.get(tier, '#495057')
+                badge = f' {_amz_badge(tier)}' if tier else ''
+                return (f'<div style="background:#f0f2f6;border-left:4px solid {c};'
+                        f'padding:6px 12px;border-radius:4px;margin:12px 0 4px 0;font-weight:600">'
+                        f'{icon} {title}{badge}</div>')
+
+            def _sub_hdr(title: str) -> str:
+                return (f'<div style="color:#6c757d;font-size:.8em;font-weight:700;'
+                        f'margin:8px 0 2px 0;text-transform:uppercase;letter-spacing:.5px">'
+                        f'{title}</div>')
+
             _ok_parsed  = [p for p in _all_parsed if p['ok']]
             _err_parsed = [p for p in _all_parsed if not p['ok']]
 
@@ -1713,30 +1737,125 @@ if tab_dsp:
                         f"Rank #{_s.get('rank_station')}"
                     )
                     with st.expander(_exp_title, expanded=False):
-                        _c1, _c2, _c3, _c4 = st.columns(4)
-                        _rw = _s.get('rank_wow')
-                        _c1.metric("Overall Score", _s.get('overall_score'), _s.get('overall_standing'))
-                        _c2.metric("Ranking", f"#{_s.get('rank_station')}",
-                                   f"{_rw:+d} WoW" if _rw is not None else None)
-                        _c3.metric(f"WHC {_tier_color.get(_s.get('whc_tier',''),'⚪')}",
-                                   f"{_s.get('whc_pct')}%", _s.get('whc_tier'))
-                        _c4.metric(f"LoR DPMO {_tier_color.get(_s.get('lor_tier',''),'⚪')}",
-                                   _s.get('lor_dpmo'), _s.get('lor_tier'))
+                        _rw  = _s.get('rank_wow')
+                        _tc  = _tier_color
+                        _ost = _s.get('overall_standing', '')
 
-                        _c5, _c6, _c7, _c8 = st.columns(4)
-                        _c5.metric(f"DCR {_tier_color.get(_s.get('dcr_tier',''),'⚪')}",
-                                   f"{_s.get('dcr_pct')}%", _s.get('dcr_tier'))
-                        _c6.metric(f"DNR DPMO {_tier_color.get(_s.get('dnr_tier',''),'⚪')}",
+                        # ── Overall ──────────────────────────────────────────
+                        _ov1, _ov2 = st.columns([3, 1])
+                        with _ov1:
+                            st.markdown(
+                                f"<div style='font-size:1.5em;font-weight:700;margin-bottom:4px'>"
+                                f"Score: {_s.get('overall_score', '—')} &nbsp;"
+                                f"{_amz_badge(_ost)}</div>",
+                                unsafe_allow_html=True
+                            )
+                        with _ov2:
+                            _wow_txt = f"{_rw:+d} WoW" if _rw is not None else None
+                            st.metric("Ranking", f"#{_s.get('rank_station', '—')}", _wow_txt)
+
+                        # ── Compliance & Safety ───────────────────────────────
+                        st.markdown(_block_hdr("🛡️", "Compliance & Safety",
+                                               _s.get('safety_tier')), unsafe_allow_html=True)
+
+                        st.markdown(_sub_hdr("Safety"), unsafe_allow_html=True)
+                        _sa1, _sa2, _sa3 = st.columns(3)
+                        _sa1.metric(f"FICO {_tc.get(_s.get('fico_tier',''),'⚪')}",
+                                    _s.get('fico'), _s.get('fico_tier'))
+                        _sa2.metric(f"Speeding {_tc.get(_s.get('speeding_tier',''),'⚪')}",
+                                    _s.get('speeding_rate'), _s.get('speeding_tier'))
+                        _ment = _s.get('mentor_adoption')
+                        _sa3.metric(f"Mentor {_tc.get(_s.get('mentor_tier',''),'⚪')}",
+                                    f"{_ment}%" if _ment is not None else "—",
+                                    _s.get('mentor_tier'))
+
+                        st.markdown(_sub_hdr("Compliance"), unsafe_allow_html=True)
+                        _co1, _co2, _co3, _co4 = st.columns(4)
+                        _vsa = _s.get('vsa_compliance')
+                        _co1.metric(f"VSA {_tc.get(_s.get('vsa_tier',''),'⚪')}",
+                                    f"{_vsa}%" if _vsa is not None else "—",
+                                    _s.get('vsa_tier'))
+                        _boc_val   = _s.get('boc') or '—'
+                        _boc_color = '#CC0000' if _boc_val == 'Yes' else '#067D50'
+                        _co2.markdown(
+                            f"<p style='font-size:.85em;margin:0;color:#6c757d'>BOC</p>"
+                            f"<span style='background:{_boc_color};color:#fff;padding:3px 10px;"
+                            f"border-radius:3px;font-size:.9em;font-weight:600'>{_boc_val}</span>",
+                            unsafe_allow_html=True
+                        )
+                        _whc = _s.get('whc_pct')
+                        _co3.metric(f"WHC {_tc.get(_s.get('whc_tier',''),'⚪')}",
+                                    f"{_whc}%" if _whc is not None else "—",
+                                    _s.get('whc_tier'))
+                        _cas_val   = _s.get('cas') or '—'
+                        _cas_color = ('#067D50' if 'Compliance' in _cas_val
+                                      else '#CC0000' if 'Non' in _cas_val else '#6c757d')
+                        _co4.markdown(
+                            f"<p style='font-size:.85em;margin:0;color:#6c757d'>CAS</p>"
+                            f"<span style='background:{_cas_color};color:#fff;padding:3px 10px;"
+                            f"border-radius:3px;font-size:.9em;font-weight:600'>{_cas_val}</span>",
+                            unsafe_allow_html=True
+                        )
+
+                        # ── Delivery Quality & SWC ───────────────────────────
+                        st.markdown(_block_hdr("📦", "Delivery Quality & SWC",
+                                               _s.get('quality_tier')), unsafe_allow_html=True)
+
+                        st.markdown(_sub_hdr("Customer Delivery Experience"), unsafe_allow_html=True)
+                        _cx1, _cx2 = st.columns(2)
+                        _cx1.metric(f"CE DPMO {_tc.get(_s.get('ce_tier',''),'⚪')}",
+                                    _s.get('ce_dpmo'), _s.get('ce_tier'))
+                        _cx2.metric(f"CDF DPMO {_tc.get(_s.get('cdf_tier',''),'⚪')}",
+                                    _s.get('cdf_dpmo'), _s.get('cdf_tier'))
+
+                        st.markdown(_sub_hdr("Standard Work Compliance"), unsafe_allow_html=True)
+                        _sw1, _sw2 = st.columns(2)
+                        _pod = _s.get('pod_pct')
+                        _sw1.metric(f"POD {_tc.get(_s.get('pod_tier',''),'⚪')}",
+                                    f"{_pod}%" if _pod is not None else "—",
+                                    _s.get('pod_tier'))
+                        _cc  = _s.get('cc_pct')
+                        _sw2.metric(f"CC {_tc.get(_s.get('cc_tier',''),'⚪')}",
+                                    f"{_cc}%" if _cc is not None else "—",
+                                    _s.get('cc_tier'))
+
+                        st.markdown(_sub_hdr("Quality"), unsafe_allow_html=True)
+                        _q1, _q2, _q3, _q4 = st.columns(4)
+                        _dcr = _s.get('dcr_pct')
+                        _q1.metric(f"DCR {_tc.get(_s.get('dcr_tier',''),'⚪')}",
+                                   f"{_dcr}%" if _dcr is not None else "—",
+                                   _s.get('dcr_tier'))
+                        _q2.metric(f"DNR DPMO {_tc.get(_s.get('dnr_tier',''),'⚪')}",
                                    _s.get('dnr_dpmo'), _s.get('dnr_tier'))
-                        _c7.metric(f"FICO {_tier_color.get(_s.get('fico_tier',''),'⚪')}",
-                                   _s.get('fico'), _s.get('fico_tier'))
-                        _c8.metric(f"POD {_tier_color.get(_s.get('pod_tier',''),'⚪')}",
-                                   f"{_s.get('pod_pct')}%", _s.get('pod_tier'))
+                        _q3.metric(f"LoR DPMO {_tc.get(_s.get('lor_tier',''),'⚪')}",
+                                   _s.get('lor_dpmo'), _s.get('lor_tier'))
+                        _q4.metric(f"DSC DPMO {_tc.get(_s.get('dsc_tier',''),'⚪')}",
+                                   _s.get('dsc_dpmo'), _s.get('dsc_tier'))
 
+                        # ── Capacity ─────────────────────────────────────────
+                        st.markdown(_block_hdr("🚛", "Capacity",
+                                               _s.get('capacity_tier')), unsafe_allow_html=True)
+                        _cap1, _cap2 = st.columns(2)
+                        _nd_val = _s.get('capacity_next_day')
+                        _cap1.metric(f"Next Day {_tc.get(_s.get('capacity_next_day_tier',''),'⚪')}",
+                                     f"{_nd_val}%" if _nd_val is not None else "—",
+                                     _s.get('capacity_next_day_tier'))
+                        _sd_val = _s.get('capacity_same_day')
+                        if _sd_val is not None:
+                            _cap2.metric(f"Same Day {_tc.get(_s.get('capacity_same_day_tier',''),'⚪')}",
+                                         f"{_sd_val}%", _s.get('capacity_same_day_tier'))
+
+                        # ── Focus Areas ──────────────────────────────────────
                         _fa1 = _s.get('focus_area_1') or '—'
                         _fa2 = _s.get('focus_area_2') or '—'
                         _fa3 = _s.get('focus_area_3') or '—'
-                        st.info(f"🎯 **Focus Areas Amazon:** 1. {_fa1} · 2. {_fa2} · 3. {_fa3}")
+                        st.markdown(
+                            f"<div style='background:#fff3cd;border-left:4px solid #FF9900;"
+                            f"padding:8px 12px;border-radius:4px;margin:12px 0 6px 0'>"
+                            f"🎯 <b>Focus Areas Amazon:</b>&nbsp; "
+                            f"1. {_fa1} &nbsp;·&nbsp; 2. {_fa2} &nbsp;·&nbsp; 3. {_fa3}</div>",
+                            unsafe_allow_html=True
+                        )
 
                         _nd = len(_p['drivers']) if not _p['drivers'].empty else 0
                         _nw = len(_p['wh']) if not _p['wh'].empty else 0
@@ -1757,9 +1876,11 @@ if tab_dsp:
                 # Columna semana/año combinada: "W09/2026"
                 if 'anio' in df_filtrado.columns:
                     df_filtrado = df_filtrado.copy()
-                    df_filtrado['semana_año'] = df_filtrado.apply(
-                        lambda r: f"{r['semana']}/{int(r['anio'])}" if pd.notna(r.get('anio')) and r.get('anio') else r['semana'],
-                        axis=1
+                    _anio_ok = df_filtrado['anio'].notna() & (df_filtrado['anio'] != 0)
+                    df_filtrado['semana_año'] = np.where(
+                        _anio_ok,
+                        df_filtrado['semana'] + '/' + df_filtrado['anio'].where(_anio_ok, 0).astype(int).astype(str),
+                        df_filtrado['semana']
                     )
                     _semana_col = 'semana_año'
                 else:
@@ -1767,32 +1888,65 @@ if tab_dsp:
 
                 cols_show = [_semana_col] + [c for c in [
                     'centro', 'overall_score', 'overall_standing', 'rank_station', 'rank_wow',
-                    'wh_count', 'whc_pct', 'whc_tier',
-                    'dcr_pct', 'dcr_tier', 'dnr_dpmo', 'dnr_tier', 'lor_dpmo', 'lor_tier',
-                    'pod_pct', 'pod_tier', 'fico', 'fico_tier',
+                    'safety_tier', 'fico', 'fico_tier', 'speeding_rate', 'speeding_tier',
+                    'mentor_adoption', 'mentor_tier', 'vsa_compliance', 'vsa_tier',
+                    'boc', 'whc_pct', 'whc_tier', 'wh_count', 'cas',
+                    'quality_tier', 'dcr_pct', 'dcr_tier', 'dnr_dpmo', 'dnr_tier',
+                    'lor_dpmo', 'lor_tier', 'dsc_dpmo', 'dsc_tier',
+                    'pod_pct', 'pod_tier', 'cc_pct', 'cc_tier',
+                    'ce_dpmo', 'ce_tier', 'cdf_dpmo', 'cdf_tier',
+                    'capacity_tier', 'capacity_next_day', 'capacity_next_day_tier',
                     'focus_area_1', 'focus_area_2', 'focus_area_3'
                 ] if c in df_filtrado.columns]
                 st.dataframe(
                     df_filtrado[cols_show],
                     use_container_width=True,
                     hide_index=True,
-                    height=400,
+                    height=420,
                     column_config={
-                        _semana_col:        st.column_config.TextColumn('Semana', width='small'),
-                        'centro':           st.column_config.TextColumn('Centro', width='small'),
-                        'overall_score':    st.column_config.NumberColumn('Score', format='%.2f', width='small'),
-                        'overall_standing': st.column_config.TextColumn('Standing', width='small'),
-                        'rank_station':     st.column_config.NumberColumn('Rank', width='small'),
-                        'rank_wow':         st.column_config.NumberColumn('WoW', width='small'),
-                        'wh_count':         st.column_config.NumberColumn('WHC Drivers', width='small'),
-                        'whc_pct':          st.column_config.NumberColumn('WHC %', format='%.2f%%', width='small'),
-                        'whc_tier':         st.column_config.TextColumn('WHC Tier', width='small'),
-                        'dcr_pct':          st.column_config.NumberColumn('DCR %', format='%.2f%%', width='small'),
-                        'dcr_tier':         st.column_config.TextColumn('DCR Tier', width='small'),
-                        'dnr_dpmo':         st.column_config.NumberColumn('DNR DPMO', format='%.0f', width='small'),
-                        'lor_dpmo':         st.column_config.NumberColumn('LoR DPMO', format='%.0f', width='small'),
-                        'pod_pct':          st.column_config.NumberColumn('POD %', format='%.2f%%', width='small'),
-                        'fico':             st.column_config.NumberColumn('FICO', format='%.0f', width='small'),
+                        _semana_col:             st.column_config.TextColumn('Semana', width='small'),
+                        'centro':                st.column_config.TextColumn('Centro', width='small'),
+                        'overall_score':         st.column_config.NumberColumn('Score', format='%.2f', width='small'),
+                        'overall_standing':      st.column_config.TextColumn('Standing', width='small'),
+                        'rank_station':          st.column_config.NumberColumn('Rank', width='small'),
+                        'rank_wow':              st.column_config.NumberColumn('WoW', width='small'),
+                        'safety_tier':           st.column_config.TextColumn('Safety', width='small'),
+                        'fico':                  st.column_config.NumberColumn('FICO', format='%.0f', width='small'),
+                        'fico_tier':             st.column_config.TextColumn('FICO Tier', width='small'),
+                        'speeding_rate':         st.column_config.NumberColumn('Speeding', format='%.2f', width='small'),
+                        'speeding_tier':         st.column_config.TextColumn('Speed Tier', width='small'),
+                        'mentor_adoption':       st.column_config.NumberColumn('Mentor %', format='%.1f', width='small'),
+                        'mentor_tier':           st.column_config.TextColumn('Mentor Tier', width='small'),
+                        'vsa_compliance':        st.column_config.NumberColumn('VSA %', format='%.1f', width='small'),
+                        'vsa_tier':              st.column_config.TextColumn('VSA Tier', width='small'),
+                        'boc':                   st.column_config.TextColumn('BOC', width='small'),
+                        'whc_pct':               st.column_config.NumberColumn('WHC %', format='%.2f', width='small'),
+                        'whc_tier':              st.column_config.TextColumn('WHC Tier', width='small'),
+                        'wh_count':              st.column_config.NumberColumn('WHC Drv.', width='small'),
+                        'cas':                   st.column_config.TextColumn('CAS', width='medium'),
+                        'quality_tier':          st.column_config.TextColumn('Quality', width='small'),
+                        'dcr_pct':               st.column_config.NumberColumn('DCR %', format='%.2f', width='small'),
+                        'dcr_tier':              st.column_config.TextColumn('DCR Tier', width='small'),
+                        'dnr_dpmo':              st.column_config.NumberColumn('DNR DPMO', format='%.0f', width='small'),
+                        'dnr_tier':              st.column_config.TextColumn('DNR Tier', width='small'),
+                        'lor_dpmo':              st.column_config.NumberColumn('LoR DPMO', format='%.0f', width='small'),
+                        'lor_tier':              st.column_config.TextColumn('LoR Tier', width='small'),
+                        'dsc_dpmo':              st.column_config.NumberColumn('DSC DPMO', format='%.0f', width='small'),
+                        'dsc_tier':              st.column_config.TextColumn('DSC Tier', width='small'),
+                        'pod_pct':               st.column_config.NumberColumn('POD %', format='%.2f', width='small'),
+                        'pod_tier':              st.column_config.TextColumn('POD Tier', width='small'),
+                        'cc_pct':                st.column_config.NumberColumn('CC %', format='%.2f', width='small'),
+                        'cc_tier':               st.column_config.TextColumn('CC Tier', width='small'),
+                        'ce_dpmo':               st.column_config.NumberColumn('CE DPMO', format='%.0f', width='small'),
+                        'ce_tier':               st.column_config.TextColumn('CE Tier', width='small'),
+                        'cdf_dpmo':              st.column_config.NumberColumn('CDF DPMO', format='%.0f', width='small'),
+                        'cdf_tier':              st.column_config.TextColumn('CDF Tier', width='small'),
+                        'capacity_tier':         st.column_config.TextColumn('Capacity', width='small'),
+                        'capacity_next_day':     st.column_config.NumberColumn('Next Day %', format='%.1f', width='small'),
+                        'capacity_next_day_tier':st.column_config.TextColumn('ND Tier', width='small'),
+                        'focus_area_1':          st.column_config.TextColumn('Focus 1', width='medium'),
+                        'focus_area_2':          st.column_config.TextColumn('Focus 2', width='medium'),
+                        'focus_area_3':          st.column_config.TextColumn('Focus 3', width='medium'),
                     }
                 )
         except Exception as e:
