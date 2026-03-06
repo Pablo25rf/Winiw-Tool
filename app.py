@@ -1163,7 +1163,19 @@ if tab_dash:
                         x=alt.X('centro:N', axis=alt.Axis(labelAngle=0), title='Centro'),
                         y=alt.Y('score_medio:Q', scale=alt.Scale(domain=[_y_min, _y_max]),
                                 title='Score Medio'),
-                        color=alt.Color('color:N', scale=None, legend=None),
+                        color=alt.condition(
+                            alt.datum.score_medio >= SCORE_FANTASTIC,
+                            alt.value('#0d6efd'),
+                            alt.condition(
+                                alt.datum.score_medio >= SCORE_GREAT,
+                                alt.value('#198754'),
+                                alt.condition(
+                                    alt.datum.score_medio >= SCORE_FAIR,
+                                    alt.value('#fd7e14'),
+                                    alt.value('#dc3545')
+                                )
+                            )
+                        ),
                         tooltip=[alt.Tooltip('centro:N', title='Centro'),
                                  alt.Tooltip('score_medio:Q', title='Score', format='.1f')]
                     ).properties(height=280))
@@ -1686,10 +1698,13 @@ if tab_dsp:
                 )
 
                 # ── PASO 3: BOTÓN ÚNICO "GUARDAR TODOS" ──────────────────
-                _btn_label = (
-                    f"💾 Guardar {len(_ok_parsed)} PDF{'s' if len(_ok_parsed) > 1 else ''}"
-                    f" — {', '.join(p['meta']['centro']+' '+p['meta']['semana'] for p in _ok_parsed)}"
-                )
+                _n_pdfs   = len(_ok_parsed)
+                _pdf_names = [p['meta']['centro'] + ' ' + p['meta']['semana'] for p in _ok_parsed]
+                if _n_pdfs <= 3:
+                    _names_str = ', '.join(_pdf_names)
+                else:
+                    _names_str = ', '.join(_pdf_names[:3]) + f' … y {_n_pdfs - 3} más'
+                _btn_label = f"💾 Guardar {_n_pdfs} PDF{'s' if _n_pdfs > 1 else ''} — {_names_str}"
                 if st.button(_btn_label, type="primary", use_container_width=True,
                              key="save_all_pdfs"):
                     _save_prog = st.progress(0, text="Guardando...")
@@ -1886,7 +1901,47 @@ if tab_dsp:
                 else:
                     _semana_col = 'semana'
 
-                cols_show = [_semana_col] + [c for c in [
+                _DSP_COL_RENAME = {
+                    'overall_score':          'Score',
+                    'overall_standing':       'Standing',
+                    'rank_station':           'Rank',
+                    'rank_wow':               'WoW',
+                    'safety_tier':            'Safety',
+                    'fico_tier':              'FICO Tier',
+                    'speeding_rate':          'Speeding',
+                    'speeding_tier':          'Speed Tier',
+                    'mentor_adoption':        'Mentor %',
+                    'mentor_tier':            'Mentor Tier',
+                    'vsa_compliance':         'VSA %',
+                    'vsa_tier':               'VSA Tier',
+                    'whc_pct':                'WHC %',
+                    'whc_tier':               'WHC Tier',
+                    'wh_count':               'WHC Drv.',
+                    'quality_tier':           'Quality',
+                    'dcr_pct':                'DCR %',
+                    'dcr_tier':               'DCR Tier',
+                    'dnr_dpmo':               'DNR DPMO',
+                    'dnr_tier':               'DNR Tier',
+                    'lor_dpmo':               'LoR DPMO',
+                    'lor_tier':               'LoR Tier',
+                    'dsc_dpmo':               'DSC DPMO',
+                    'dsc_tier':               'DSC Tier',
+                    'pod_pct':                'POD %',
+                    'pod_tier':               'POD Tier',
+                    'cc_pct':                 'CC %',
+                    'cc_tier':                'CC Tier',
+                    'ce_dpmo':                'CE DPMO',
+                    'ce_tier':                'CE Tier',
+                    'cdf_dpmo':               'CDF DPMO',
+                    'cdf_tier':               'CDF Tier',
+                    'capacity_tier':          'Capacity',
+                    'capacity_next_day':      'Next Day %',
+                    'capacity_next_day_tier': 'ND Tier',
+                    'focus_area_1':           'Focus 1',
+                    'focus_area_2':           'Focus 2',
+                    'focus_area_3':           'Focus 3',
+                }
+                _raw_cols = [_semana_col] + [c for c in [
                     'centro', 'overall_score', 'overall_standing', 'rank_station', 'rank_wow',
                     'safety_tier', 'fico', 'fico_tier', 'speeding_rate', 'speeding_tier',
                     'mentor_adoption', 'mentor_tier', 'vsa_compliance', 'vsa_tier',
@@ -1898,56 +1953,15 @@ if tab_dsp:
                     'capacity_tier', 'capacity_next_day', 'capacity_next_day_tier',
                     'focus_area_1', 'focus_area_2', 'focus_area_3'
                 ] if c in df_filtrado.columns]
+                _semana_pretty = 'Semana' if _semana_col == 'semana' else 'Semana/Año'
+                _rename_map    = {_semana_col: _semana_pretty, **{k: v for k, v in _DSP_COL_RENAME.items() if k in _raw_cols}}
+                df_display     = df_filtrado[_raw_cols].rename(columns=_rename_map)
+                cols_show      = df_display.columns.tolist()
                 st.dataframe(
-                    df_filtrado[cols_show],
+                    df_display,
                     use_container_width=True,
                     hide_index=True,
                     height=420,
-                    column_config={
-                        _semana_col:             st.column_config.TextColumn('Semana', width='small'),
-                        'centro':                st.column_config.TextColumn('Centro', width='small'),
-                        'overall_score':         st.column_config.NumberColumn('Score', format='%.2f', width='small'),
-                        'overall_standing':      st.column_config.TextColumn('Standing', width='small'),
-                        'rank_station':          st.column_config.NumberColumn('Rank', width='small'),
-                        'rank_wow':              st.column_config.NumberColumn('WoW', width='small'),
-                        'safety_tier':           st.column_config.TextColumn('Safety', width='small'),
-                        'fico':                  st.column_config.NumberColumn('FICO', format='%.0f', width='small'),
-                        'fico_tier':             st.column_config.TextColumn('FICO Tier', width='small'),
-                        'speeding_rate':         st.column_config.NumberColumn('Speeding', format='%.2f', width='small'),
-                        'speeding_tier':         st.column_config.TextColumn('Speed Tier', width='small'),
-                        'mentor_adoption':       st.column_config.NumberColumn('Mentor %', format='%.1f', width='small'),
-                        'mentor_tier':           st.column_config.TextColumn('Mentor Tier', width='small'),
-                        'vsa_compliance':        st.column_config.NumberColumn('VSA %', format='%.1f', width='small'),
-                        'vsa_tier':              st.column_config.TextColumn('VSA Tier', width='small'),
-                        'boc':                   st.column_config.TextColumn('BOC', width='small'),
-                        'whc_pct':               st.column_config.NumberColumn('WHC %', format='%.2f', width='small'),
-                        'whc_tier':              st.column_config.TextColumn('WHC Tier', width='small'),
-                        'wh_count':              st.column_config.NumberColumn('WHC Drv.', width='small'),
-                        'cas':                   st.column_config.TextColumn('CAS', width='medium'),
-                        'quality_tier':          st.column_config.TextColumn('Quality', width='small'),
-                        'dcr_pct':               st.column_config.NumberColumn('DCR %', format='%.2f', width='small'),
-                        'dcr_tier':              st.column_config.TextColumn('DCR Tier', width='small'),
-                        'dnr_dpmo':              st.column_config.NumberColumn('DNR DPMO', format='%.0f', width='small'),
-                        'dnr_tier':              st.column_config.TextColumn('DNR Tier', width='small'),
-                        'lor_dpmo':              st.column_config.NumberColumn('LoR DPMO', format='%.0f', width='small'),
-                        'lor_tier':              st.column_config.TextColumn('LoR Tier', width='small'),
-                        'dsc_dpmo':              st.column_config.NumberColumn('DSC DPMO', format='%.0f', width='small'),
-                        'dsc_tier':              st.column_config.TextColumn('DSC Tier', width='small'),
-                        'pod_pct':               st.column_config.NumberColumn('POD %', format='%.2f', width='small'),
-                        'pod_tier':              st.column_config.TextColumn('POD Tier', width='small'),
-                        'cc_pct':                st.column_config.NumberColumn('CC %', format='%.2f', width='small'),
-                        'cc_tier':               st.column_config.TextColumn('CC Tier', width='small'),
-                        'ce_dpmo':               st.column_config.NumberColumn('CE DPMO', format='%.0f', width='small'),
-                        'ce_tier':               st.column_config.TextColumn('CE Tier', width='small'),
-                        'cdf_dpmo':              st.column_config.NumberColumn('CDF DPMO', format='%.0f', width='small'),
-                        'cdf_tier':              st.column_config.TextColumn('CDF Tier', width='small'),
-                        'capacity_tier':         st.column_config.TextColumn('Capacity', width='small'),
-                        'capacity_next_day':     st.column_config.NumberColumn('Next Day %', format='%.1f', width='small'),
-                        'capacity_next_day_tier':st.column_config.TextColumn('ND Tier', width='small'),
-                        'focus_area_1':          st.column_config.TextColumn('Focus 1', width='medium'),
-                        'focus_area_2':          st.column_config.TextColumn('Focus 2', width='medium'),
-                        'focus_area_3':          st.column_config.TextColumn('Focus 3', width='medium'),
-                    }
                 )
         except Exception as e:
             st.error(f"❌ Error: {e}")
