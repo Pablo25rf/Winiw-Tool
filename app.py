@@ -3607,6 +3607,71 @@ if tab_admin:
                     st.error("❌ Error durante el mantenimiento. Ver logs.")
 
         st.divider()
+        st.subheader("🗄️ Estado y Limpieza de Base de Datos")
+
+        with st.expander("📊 Resumen de tablas en Supabase", expanded=False):
+            try:
+                with scorecard.db_connection(db_config) as _conn:
+                    _tables_info = []
+                    for _tbl, _lbl in [
+                        ('scorecards',         'Scorecards (conductores CSV)'),
+                        ('station_scorecards', 'Station Scorecards (PDFs)'),
+                        ('wh_exceptions',      'WH Exceptions'),
+                        ('center_targets',     'Center Targets'),
+                        ('users',              'Usuarios'),
+                    ]:
+                        try:
+                            _n = pd.read_sql_query(f"SELECT COUNT(*) AS n FROM {_tbl}", _conn)['n'][0]
+                        except Exception:
+                            _n = '—'
+                        _tables_info.append({'Tabla': _tbl, 'Descripción': _lbl, 'Filas': _n})
+
+                    _centros_sc  = pd.read_sql_query("SELECT DISTINCT centro FROM scorecards ORDER BY centro", _conn)['centro'].tolist()
+                    _centros_ss  = pd.read_sql_query("SELECT DISTINCT centro FROM station_scorecards ORDER BY centro", _conn)['centro'].tolist()
+                    _centros_ct  = pd.read_sql_query("SELECT centro FROM center_targets ORDER BY centro", _conn)['centro'].tolist()
+
+                st.dataframe(pd.DataFrame(_tables_info), use_container_width=True, hide_index=True)
+
+                _c1, _c2, _c3 = st.columns(3)
+                _c1.metric("Centros en scorecards", len(_centros_sc))
+                _c2.metric("Centros en station_scorecards", len(_centros_ss))
+                _c3.metric("Centros en center_targets", len(_centros_ct))
+
+                _all_centros = sorted(set(_centros_sc) | set(_centros_ss))
+                _missing     = sorted(set(_all_centros) - set(_centros_ct))
+                if _missing:
+                    st.warning(f"⚠️ **{len(_missing)} centros sin target configurado**: {', '.join(_missing)}")
+                else:
+                    st.success("✅ Todos los centros tienen targets configurados")
+            except Exception as _e:
+                st.error(f"Error leyendo BD: {_e}")
+
+        if st.button("🔄 Sincronizar centros en center_targets",
+                     help="Inserta con valores por defecto todos los centros que existen en scorecards o station_scorecards pero no tienen target configurado.",
+                     use_container_width=True):
+            try:
+                with scorecard.db_connection(db_config) as _conn:
+                    _sc  = pd.read_sql_query("SELECT DISTINCT centro FROM scorecards", _conn)['centro'].tolist()
+                    _ss  = pd.read_sql_query("SELECT DISTINCT centro FROM station_scorecards", _conn)['centro'].tolist()
+                    _ct  = pd.read_sql_query("SELECT centro FROM center_targets", _conn)['centro'].tolist()
+
+                _to_insert = sorted((set(_sc) | set(_ss)) - set(_ct))
+                if not _to_insert:
+                    st.info("✅ Todos los centros ya están en center_targets — nada que hacer.")
+                else:
+                    _ok_count = 0
+                    for _centro in _to_insert:
+                        _defaults = {'centro': _centro, **scorecard.Config.DEFAULT_TARGETS}
+                        if scorecard.save_center_targets(_defaults, db_config=db_config):
+                            _ok_count += 1
+                    _clear_all_caches()
+                    _audit(f"Sincronizó {_ok_count} centros en center_targets")
+                    st.success(f"✅ **{_ok_count} centros añadidos**: {', '.join(_to_insert)}")
+                    st.rerun()
+            except Exception as _e:
+                st.error(f"❌ Error sincronizando: {_e}")
+
+        st.divider()
         st.subheader("🎯 Configuración de Targets por Centro")
         st.caption("Define los umbrales de calidad para cada centro. Afecta al cálculo de scores.")
 
