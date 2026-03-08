@@ -55,6 +55,19 @@ MAX_LOGIN_ATTEMPTS    = 5        # intentos fallidos antes del bloqueo
 LOGIN_LOCKOUT_MINUTES = 15       # minutos de bloqueo tras agotar intentos
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BOOTSTRAP: propagar st.secrets → os.environ para el motor (Streamlit Cloud)
+# ─────────────────────────────────────────────────────────────────────────────
+import os as _os
+try:
+    for _k in ("WINIW_ADMIN_USER", "WINIW_ADMIN_PASS"):
+        if _k not in _os.environ:
+            _v = st.secrets.get(_k) or st.secrets.get("app", {}).get(_k)
+            if _v:
+                _os.environ[_k] = str(_v)
+except Exception:
+    pass
+
+# ─────────────────────────────────────────────────────────────────────────────
 # CONFIG INICIAL
 # ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(

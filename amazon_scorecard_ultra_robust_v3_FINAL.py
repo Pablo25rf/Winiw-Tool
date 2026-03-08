@@ -1872,17 +1872,26 @@ def init_database(db_config: Optional[Dict] = None):
         _default_user = _os.environ.get("WINIW_ADMIN_USER")
         _default_pw   = _os.environ.get("WINIW_ADMIN_PASS")
         if not _default_user or not _default_pw:
-            raise RuntimeError(
-                "WINIW_ADMIN_USER y WINIW_ADMIN_PASS son obligatorias. "
-                "Define estas variables de entorno antes de arrancar la app."
-            )
-        q_check = "SELECT id FROM users WHERE LOWER(username) = %s" if is_postgres else "SELECT id FROM users WHERE LOWER(username) = ?"
-        cursor.execute(q_check, (_default_user.lower(),))
-        if not cursor.fetchone():
-            admin_pass = hash_password(_default_pw)
-            q_ins = "INSERT INTO users (username, password, role, must_change_password) VALUES (%s, %s, %s, %s)" if is_postgres else "INSERT INTO users (username, password, role, must_change_password) VALUES (?, ?, ?, ?)"
-            cursor.execute(q_ins, (_default_user, admin_pass, "superadmin", 1))
-            logger.info(f"Usuario '{_default_user}' creado como SUPERADMIN (requiere cambio de contraseña).")
+            q_any_admin = ("SELECT COUNT(*) FROM users WHERE role IN ('admin','superadmin') AND active = 1"
+                           if is_postgres else
+                           "SELECT COUNT(*) FROM users WHERE role IN ('admin','superadmin') AND active = 1")
+            cursor.execute(q_any_admin)
+            _n_admins = cursor.fetchone()[0]
+            if _n_admins > 0:
+                logger.warning("WINIW_ADMIN_USER/PASS no configuradas — se omite bootstrap (ya existen admins en BD).")
+            else:
+                raise RuntimeError(
+                    "WINIW_ADMIN_USER y WINIW_ADMIN_PASS son obligatorias. "
+                    "Define estas variables de entorno antes de arrancar la app."
+                )
+        else:
+            q_check = "SELECT id FROM users WHERE LOWER(username) = %s" if is_postgres else "SELECT id FROM users WHERE LOWER(username) = ?"
+            cursor.execute(q_check, (_default_user.lower(),))
+            if not cursor.fetchone():
+                admin_pass = hash_password(_default_pw)
+                q_ins = "INSERT INTO users (username, password, role, must_change_password) VALUES (%s, %s, %s, %s)" if is_postgres else "INSERT INTO users (username, password, role, must_change_password) VALUES (?, ?, ?, ?)"
+                cursor.execute(q_ins, (_default_user, admin_pass, "superadmin", 1))
+                logger.info(f"Usuario '{_default_user}' creado como SUPERADMIN (requiere cambio de contraseña).")
         
         conn.commit()
         return True
