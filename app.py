@@ -1168,27 +1168,24 @@ if tab_dash:
             if not df_chart.empty:
                 _y_min = max(0, float(df_chart['score_medio'].min()) - 12)
                 _y_max = min(100, float(df_chart['score_medio'].max()) + 8)
-                df_chart['color'] = df_chart['score_medio'].apply(_score_color)
                 df_chart['label'] = df_chart['score_medio'].apply(lambda x: f"{x:.1f}")
+                df_chart['tier'] = pd.cut(
+                    df_chart['score_medio'],
+                    bins=[-1, SCORE_FAIR, SCORE_GREAT, SCORE_FANTASTIC, 101],
+                    labels=['Poor', 'Fair', 'Great', 'Fantastic']
+                ).astype(str)
+                _color_scale = alt.Scale(
+                    domain=['Fantastic', 'Great', 'Fair', 'Poor'],
+                    range=['#0d6efd', '#198754', '#fd7e14', '#dc3545']
+                )
                 _bars = (alt.Chart(df_chart)
-                    .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6, size=min(80, max(20, 500 // max(1, len(df_chart)))))
+                    .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6,
+                              size=min(80, max(20, 500 // max(1, len(df_chart)))))
                     .encode(
                         x=alt.X('centro:N', axis=alt.Axis(labelAngle=0), title='Centro'),
                         y=alt.Y('score_medio:Q', scale=alt.Scale(domain=[_y_min, _y_max]),
                                 title='Score Medio'),
-                        color=alt.condition(
-                            alt.datum.score_medio >= SCORE_FANTASTIC,
-                            alt.value('#0d6efd'),
-                            alt.condition(
-                                alt.datum.score_medio >= SCORE_GREAT,
-                                alt.value('#198754'),
-                                alt.condition(
-                                    alt.datum.score_medio >= SCORE_FAIR,
-                                    alt.value('#fd7e14'),
-                                    alt.value('#dc3545')
-                                )
-                            )
-                        ),
+                        color=alt.Color('tier:N', scale=_color_scale, legend=None),
                         tooltip=[alt.Tooltip('centro:N', title='Centro'),
                                  alt.Tooltip('score_medio:Q', title='Score', format='.1f')]
                     ).properties(height=280))
