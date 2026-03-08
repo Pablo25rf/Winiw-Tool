@@ -2724,11 +2724,11 @@ def save_station_scorecard(station_data: dict, week: str, center: str,
             cursor.execute(query, vals)
             conn.commit()
         logger.info(f"✓ station_scorecard guardado: {center} {week} | Score: {station_data.get('overall_score')} {station_data.get('overall_standing')}")
-        return True
+        return True, ''
 
     except Exception as e:
         logger.error(f"save_station_scorecard error: {e}")
-        return False
+        return False, str(e)
 
 
 def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,

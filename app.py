@@ -1724,7 +1724,7 @@ if tab_dsp:
                         _s = _p['station']
                         _c, _w, _yr = _m['centro'], _m['semana'], _m.get('year')
                         try:
-                            _ok_st = scorecard.save_station_scorecard(
+                            _ok_st, _err_st = scorecard.save_station_scorecard(
                                 _s, _w, _c, db_config, user_data_session['name'],
                                 year=_yr)
                             _n_upd, _n_miss = scorecard.update_drivers_from_pdf(
@@ -1732,11 +1732,16 @@ if tab_dsp:
                             _ok_wh = scorecard.save_wh_exceptions(
                                 _p['wh'], _w, _c, db_config, user_data_session['name'],
                                 year=_yr)
-                            _audit(f"Guardó PDF DSP {_c} {_w}")
-                            _save_results.append(
-                                f"✅ **{_c} {_w}** — {_n_upd} drivers · "
-                                f"{'✅' if _ok_wh else '⚠️'} WHC"
-                            )
+                            if _ok_st:
+                                _audit(f"Guardó PDF DSP {_c} {_w}")
+                                _save_results.append(
+                                    f"✅ **{_c} {_w}** — {_n_upd} drivers · "
+                                    f"{'✅' if _ok_wh else '⚠️'} WHC"
+                                )
+                            else:
+                                _save_results.append(
+                                    f"❌ **{_c} {_w}** — Scorecard no guardado: `{_err_st}`"
+                                )
                         except Exception as _e:
                             _save_results.append(f"❌ **{_c} {_w}** — Error: {_e}")
                         _save_prog.progress((_i + 1) / len(_ok_parsed))
