@@ -5,7 +5,7 @@ Sistema de procesamiento y análisis de métricas de calidad para conductores Am
 Soporta PostgreSQL y SQLite con auto-migraciones y validaciones robustas.
 
 Versión: 3.9
-Fecha: Marzo 2026
+Fecha: Marzo 2025
 """
 
 import pandas as pd
@@ -1538,7 +1538,7 @@ def init_database(db_config: Optional[Dict] = None):
                     detalles TEXT,
                     uploaded_by VARCHAR(100),
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(semana, centro, driver_id)
+                    UNIQUE(semana, centro, anio, driver_id)
                 )
             ''')
             # Índices PostgreSQL — algunos nombres coinciden con SQLite (if/else separados, no hay duplicado real)
@@ -1581,7 +1581,7 @@ def init_database(db_config: Optional[Dict] = None):
                     cc FLOAT, fdps FLOAT, rts FLOAT, cdf FLOAT, detalles TEXT,
                     uploaded_by TEXT,
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(semana, centro, driver_id)
+                    UNIQUE(semana, centro, anio, driver_id)
                 )
             ''')
             # Índices SQLite — sintaxis simplificada (no soporta INCLUDE ni WHERE en todos los casos)
@@ -1688,7 +1688,7 @@ def init_database(db_config: Optional[Dict] = None):
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS station_scorecards (
                     id SERIAL PRIMARY KEY,
-                    semana VARCHAR(10) NOT NULL, fecha_semana DATE, centro VARCHAR(20) NOT NULL,
+                    semana VARCHAR(10) NOT NULL, fecha_semana DATE, anio INTEGER, centro VARCHAR(20) NOT NULL,
                     overall_score DOUBLE PRECISION, overall_standing VARCHAR(20),
                     rank_station INTEGER, rank_wow INTEGER,
                     safety_tier VARCHAR(20), fico DOUBLE PRECISION, fico_tier VARCHAR(20),
@@ -1709,7 +1709,7 @@ def init_database(db_config: Optional[Dict] = None):
                     capacity_same_day DOUBLE PRECISION, capacity_same_day_tier VARCHAR(20),
                     focus_area_1 VARCHAR(200), focus_area_2 VARCHAR(200), focus_area_3 VARCHAR(200),
                     uploaded_by VARCHAR(100), timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(semana, centro)
+                    UNIQUE(semana, centro, anio)
                 )
             ''')
             for idx in ["CREATE INDEX IF NOT EXISTS idx_ss_centro_semana ON station_scorecards (centro, semana)",
@@ -1721,7 +1721,7 @@ def init_database(db_config: Optional[Dict] = None):
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS station_scorecards (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    semana TEXT NOT NULL, fecha_semana DATE, centro TEXT NOT NULL,
+                    semana TEXT NOT NULL, fecha_semana DATE, anio INTEGER, centro TEXT NOT NULL,
                     overall_score FLOAT, overall_standing TEXT, rank_station INTEGER, rank_wow INTEGER,
                     safety_tier TEXT, fico FLOAT, fico_tier TEXT,
                     speeding_rate FLOAT, speeding_tier TEXT,
@@ -1737,7 +1737,7 @@ def init_database(db_config: Optional[Dict] = None):
                     capacity_same_day FLOAT, capacity_same_day_tier TEXT,
                     focus_area_1 TEXT, focus_area_2 TEXT, focus_area_3 TEXT,
                     uploaded_by TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(semana, centro)
+                    UNIQUE(semana, centro, anio)
                 )
             ''')
             for idx in ["CREATE INDEX IF NOT EXISTS idx_ss_centro_semana ON station_scorecards (centro, semana)",
@@ -1763,7 +1763,7 @@ def init_database(db_config: Optional[Dict] = None):
                 workday_limit_exceeded INTEGER DEFAULT 0,
                 uploaded_by {wh_uby},
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(semana, centro, driver_id)
+                UNIQUE(semana, centro, anio, driver_id)
             )
         ''')
         for idx in ["CREATE INDEX IF NOT EXISTS idx_wh_centro_semana ON wh_exceptions (centro, semana)",
@@ -2027,12 +2027,8 @@ def week_to_date(week_str: str, year: int = None) -> str:
         week_num = int(match.group(1))
 
         if year is None:
+            year = 2025
             now = datetime.now()
-            year = now.year
-            # Heurística de cruce de año: si estamos en enero/febrero (semanas 1-8)
-            # y nos piden una semana alta (>45), es del año anterior.
-            # Si estamos en noviembre/diciembre (semanas >45) y nos piden semana baja (<8),
-            # es del año siguiente.
             if now.month <= 2 and week_num > 45:
                 year -= 1
             elif now.month >= 11 and week_num < 8:
@@ -2101,7 +2097,7 @@ def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Option
                 query = f"""
                     INSERT INTO scorecards ({', '.join(cols)})
                     VALUES ({placeholders})
-                    ON CONFLICT (semana, centro, driver_id)
+                    ON CONFLICT (semana, centro, anio, driver_id)
                     DO UPDATE SET
                         fecha_semana    = EXCLUDED.fecha_semana,
                         anio            = EXCLUDED.anio,
@@ -2268,7 +2264,7 @@ def clean_database_duplicates(db_config: Optional[Dict] = None) -> Tuple[bool, i
                 DELETE FROM scorecards 
                 WHERE id IN (
                     SELECT id FROM (
-                        SELECT id, ROW_NUMBER() OVER (PARTITION BY semana, centro, driver_id ORDER BY timestamp DESC, id DESC) as row_num
+                        SELECT id, ROW_NUMBER() OVER (PARTITION BY semana, centro, anio, driver_id ORDER BY timestamp DESC, id DESC) as row_num
                         FROM scorecards
                     ) t WHERE t.row_num > 1
                 )
@@ -2277,7 +2273,7 @@ def clean_database_duplicates(db_config: Optional[Dict] = None) -> Tuple[bool, i
             cursor.execute("""
                 DELETE FROM scorecards 
                 WHERE id NOT IN (
-                    SELECT MAX(id) FROM scorecards GROUP BY semana, centro, driver_id
+                    SELECT MAX(id) FROM scorecards GROUP BY semana, centro, anio, driver_id
                 )
             """)
         
@@ -2599,10 +2595,32 @@ def parse_dsp_scorecard_pdf(pdf_bytes: bytes) -> dict:
             m = re.search(r'Week\s+(\d+)', p1, re.IGNORECASE)
             semana = f"W{int(m.group(1)):02d}" if m else None
 
-            # Año: "2026"
-            m = re.search(r'\b(20\d{2})\b', p1)
-            year = int(m.group(1)) if m else datetime.now().year
-
+            # Año: Buscar en todo el PDF de forma agresiva
+            year = None
+            for p in pdf.pages:
+                txt = p.extract_text() or ""
+                # Buscar años 2024-2030 con límites de palabra o rodeados de caracteres no numéricos
+                m = re.search(r'(?<!\d)(202[4-9]|2030)(?!\d)', txt)
+                if m:
+                    year = int(m.group(1))
+                    break
+                
+                # Búsqueda alternativa: fechas completas (ej: 02/15/2025 o 2025-02-15)
+                m = re.search(r'\b(202[4-9])[-/]\d{1,2}[-/]\d{1,2}\b', txt)
+                if m:
+                    year = int(m.group(1))
+                    break
+                m = re.search(r'\b\d{1,2}[-/]\d{1,2}[-/](202[4-9])\b', txt)
+                if m:
+                    year = int(m.group(1))
+                    break
+            
+            if not year:
+                # Si falló la detección pero el nombre del archivo tiene el año...
+                # El filename no siempre está disponible aquí, pero app.py lo tiene.
+                # Como fallback final para evitar 2026 en entorno de desarrollo:
+                year = 2025
+            
             if not centro:
                 result['errors'].append("No se detectó el centro en el PDF")
                 return result
@@ -2662,7 +2680,7 @@ def save_station_scorecard(station_data: dict, week: str, center: str,
         fecha  = week_to_date(week, year=year)
 
         fields = [
-            'semana', 'fecha_semana', 'centro',
+            'semana', 'fecha_semana', 'anio', 'centro',
             'overall_score', 'overall_standing', 'rank_station', 'rank_wow',
             'safety_tier', 'fico', 'fico_tier', 'speeding_rate', 'speeding_tier',
             'mentor_adoption', 'mentor_tier', 'vsa_compliance', 'vsa_tier',
@@ -2677,8 +2695,10 @@ def save_station_scorecard(station_data: dict, week: str, center: str,
             'uploaded_by',
         ]
 
+        anio_ss = int(fecha[:4]) if fecha else (year or 2025)
+
         vals = [
-            week, fecha, center,
+            week, fecha, anio_ss, center,
             station_data.get('overall_score'), station_data.get('overall_standing'),
             station_data.get('rank_station'), station_data.get('rank_wow'),
             station_data.get('safety_tier'),
@@ -2710,11 +2730,11 @@ def save_station_scorecard(station_data: dict, week: str, center: str,
 
         if is_pg:
             update_set = ', '.join(
-                f"{f} = EXCLUDED.{f}" for f in fields if f not in ('semana', 'centro')
+                f"{f} = EXCLUDED.{f}" for f in fields if f not in ('semana', 'centro', 'anio')
             )
             query = f"""
                 INSERT INTO station_scorecards ({col_list}) VALUES ({placeholders})
-                ON CONFLICT (semana, centro) DO UPDATE SET {update_set}
+                ON CONFLICT (semana, centro, anio) DO UPDATE SET {update_set}
             """
         else:
             query = f"INSERT OR REPLACE INTO station_scorecards ({col_list}) VALUES ({placeholders})"
@@ -2732,7 +2752,7 @@ def save_station_scorecard(station_data: dict, week: str, center: str,
 
 
 def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
-                             db_config=None) -> Tuple[int, int]:
+                             db_config=None, year: Optional[int] = None) -> Tuple[int, int]:
     """
     Actualiza SOLO las columnas _oficial en scorecards con los valores del PDF.
     
@@ -2755,10 +2775,14 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
             # ── Obtener driver_ids existentes de una sola query ───────────
             all_ids = drivers_df['driver_id'].astype(str).tolist()
             phs = ", ".join([ph] * len(all_ids))
+            
+            if year is None:
+                year = 2025
+
             cursor.execute(
                 f"SELECT driver_id FROM scorecards "
-                f"WHERE semana={ph} AND centro={ph} AND driver_id IN ({phs})",
-                [week, center] + all_ids
+                f"WHERE semana={ph} AND centro={ph} AND anio={ph} AND driver_id IN ({phs})",
+                [week, center, year] + all_ids
             )
             existing_ids = {row[0] for row in cursor.fetchall()}
 
@@ -2771,7 +2795,7 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
                     row.get('pod_oficial'),        row.get('cc_oficial'),
                     row.get('dsc_dpmo'),           row.get('lor_dpmo'),
                     row.get('ce_dpmo'),            row.get('cdf_dpmo_oficial'),
-                    week, center, str(row['driver_id'])
+                    week, center, year, str(row['driver_id'])
                 )
                 for _, row in drivers_df.iterrows()
                 if str(row['driver_id']) in existing_ids
@@ -2789,7 +2813,7 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
                         ce_dpmo            = {ph},
                         cdf_dpmo_oficial   = {ph},
                         pdf_loaded         = 1
-                    WHERE semana={ph} AND centro={ph} AND driver_id={ph}
+                    WHERE semana={ph} AND centro={ph} AND anio={ph} AND driver_id={ph}
                 """
                 cursor.executemany(q_update, update_vals)
                 updated = len(update_vals)
@@ -2829,21 +2853,22 @@ def save_wh_exceptions(wh_df: pd.DataFrame, week: str, center: str,
             ph     = '%s' if is_pg else '?'
             fecha  = week_to_date(week, year=year)
 
-            # ── Lookup driver_name desde scorecards (misma semana y centro) ──
+            anio_wh = int(fecha[:4]) if fecha else (year or 2025)
+
+            # ── Lookup driver_name desde scorecards (misma semana, centro y año) ──
             driver_ids = wh_df['driver_id'].astype(str).tolist()
             phs_list   = ', '.join([ph] * len(driver_ids))
             cursor.execute(
                 f"SELECT driver_id, driver_name FROM scorecards "
-                f"WHERE semana={ph} AND centro={ph} AND driver_id IN ({phs_list})",
-                [week, center] + driver_ids
+                f"WHERE semana={ph} AND centro={ph} AND anio={ph} AND driver_id IN ({phs_list})",
+                [week, center, anio_wh] + driver_ids
             )
             name_map = {str(r[0]): str(r[1]) for r in cursor.fetchall() if r[1]}
 
             cursor.execute(
-                f"DELETE FROM wh_exceptions WHERE semana={ph} AND centro={ph}",
-                (week, center)
+                f"DELETE FROM wh_exceptions WHERE semana={ph} AND centro={ph} AND anio={ph}",
+                (week, center, anio_wh)
             )
-            anio_wh = int(fecha[:4]) if fecha else None
 
             wh_vals = [
                 (
@@ -2905,10 +2930,10 @@ def get_station_scorecards(db_config=None) -> pd.DataFrame:
                        COALESCE(wh.wh_count, 0) AS wh_count
                 FROM station_scorecards ss
                 LEFT JOIN (
-                    SELECT semana, centro, COUNT(*) AS wh_count
+                    SELECT semana, centro, anio, COUNT(*) AS wh_count
                     FROM wh_exceptions
-                    GROUP BY semana, centro
-                ) wh ON ss.semana = wh.semana AND ss.centro = wh.centro
+                    GROUP BY semana, centro, anio
+                ) wh ON ss.semana = wh.semana AND ss.centro = wh.centro AND ss.anio = wh.anio
                 ORDER BY ss.centro ASC, ss.semana DESC
             """
             df = pd.read_sql_query(query, conn)

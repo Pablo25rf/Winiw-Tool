@@ -1419,6 +1419,11 @@ if tab_proc:
                                 cached_center_targets.clear()
                                 current_week   = week_manual if week_manual else week
                                 current_center = center_manual if center_manual else center
+                                _year_to_save = data.get('year')
+                                if _year_to_save is None:
+                                    # Por defecto 2025 (quirúrgico)
+                                    _year_to_save = 2025
+                                    
                                 scorecard.delete_scorecard_batch(current_week, current_center, db_config=db_config)
 
                                 df = scorecard.process_single_batch(
@@ -1432,7 +1437,7 @@ if tab_proc:
                                         df, current_week, current_center,
                                         db_config=db_config,
                                         uploaded_by=user_data_session['name'],
-                                        year=data.get('year'),
+                                        year=_year_to_save,
                                     )
                                     # Invalidar solo el caché relacionado con este lote
                                     # (no borramos todo para no perjudicar a usuarios concurrentes)
@@ -1590,11 +1595,12 @@ if tab_proc:
                                 )
 
                                 if df_bulk is not None:
+                                    _year_to_save_b = year_f if year_f else 2025
                                     ok_b = scorecard.save_to_database(
                                         df_bulk, week_f, center_f,
                                         db_config=db_config,
                                         uploaded_by=f"{user_data_session['name']} (bulk)",
-                                        year=year_f,
+                                        year=_year_to_save_b,
                                     )
                                     status = "✅" if ok_b else "⚠️"
                                     results_bulk.append(
@@ -1631,9 +1637,20 @@ if tab_dsp:
         st.header("📋 DSP Weekly Scorecard — PDF oficial Amazon")
         st.markdown("Sube los PDFs semanales para guardar KPIs oficiales de estación y actualizar métricas de conductores.")
 
+        _last_result = st.session_state.pop('_dsp_last_result', None)
+        if _last_result:
+            all_ok = all(r.startswith("✅") for r in _last_result)
+            msg = "**PDFs guardados correctamente:**\n\n" + "\n\n".join(_last_result)
+            if all_ok:
+                st.success(msg)
+            else:
+                st.warning(msg)
+
+        _uploader_key = f"dsp_uploader_{st.session_state.get('_dsp_uploader_reset', 0)}"
         uploaded_pdfs = st.file_uploader(
             "Seleccionar PDFs (puedes subir varios a la vez)",
-            type=["pdf"], accept_multiple_files=True
+            type=["pdf"], accept_multiple_files=True,
+            key=_uploader_key
         )
 
         if uploaded_pdfs:
@@ -1723,12 +1740,14 @@ if tab_dsp:
                         _m = _p['meta']
                         _s = _p['station']
                         _c, _w, _yr = _m['centro'], _m['semana'], _m.get('year')
+                        if _yr is None:
+                            _yr = 2025
                         try:
                             _ok_st, _err_st = scorecard.save_station_scorecard(
                                 _s, _w, _c, db_config, user_data_session['name'],
                                 year=_yr)
                             _n_upd, _n_miss = scorecard.update_drivers_from_pdf(
-                                _p['drivers'], _w, _c, db_config)
+                                _p['drivers'], _w, _c, db_config, year=_yr)
                             _ok_wh = scorecard.save_wh_exceptions(
                                 _p['wh'], _w, _c, db_config, user_data_session['name'],
                                 year=_yr)
@@ -1746,18 +1765,22 @@ if tab_dsp:
                             _save_results.append(f"❌ **{_c} {_w}** — Error: {_e}")
                         _save_prog.progress((_i + 1) / len(_ok_parsed))
 
-                    # Limpiar cachés una sola vez al final
                     _clear_all_caches()
-                    # Limpiar estado para no re-guardar accidentalmente
                     st.session_state.pop('_dsp_pdf_key', None)
                     st.session_state.pop('_dsp_all_parsed', None)
+                    st.session_state['_dsp_uploader_reset'] = st.session_state.get('_dsp_uploader_reset', 0) + 1
+                    st.session_state['_dsp_last_result'] = _save_results
+                    st.rerun()
 
-                    st.success("**Resultado del guardado:**\n\n" + "\n\n".join(_save_results))
-
-                # ── PASO 4: Detalle por PDF (cerrado por defecto) ─────────
+                # ── PASO 4: Detalle por PDF (oculto por defecto) ────────────
                 st.markdown("---")
-                st.caption("🔍 Detalle por PDF — haz clic para expandir")
-                for _p in _ok_parsed:
+                _show_detail = st.checkbox(
+                    "🔍 Ver detalle completo por PDF",
+                    value=False,
+                    key=f"_dsp_show_detail_{_pdf_key[:40]}"
+                )
+                if _show_detail:
+                 for _p in _ok_parsed:
                     _m = _p['meta']
                     _s = _p['station']
                     _icon = _tier_color.get(_s.get('overall_standing', ''), '⚪')

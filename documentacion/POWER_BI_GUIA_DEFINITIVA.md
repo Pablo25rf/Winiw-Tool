@@ -14,7 +14,7 @@
 3. Introducir:
 
 ```
-Servidor:        aws-0-us-west-1.pooler.supabase.com:6543
+Servidor:        aws-1-eu-west-3.pooler.supabase.com:6543
 Base de datos:   postgres
 ```
 
@@ -61,6 +61,35 @@ ORDER BY fecha_semana DESC
 > ⚠️ Para **DirectQuery** necesitas Power BI Premium o Premium Per User.
 > Para uso normal, **Importar** con refresh automático cada hora es suficiente.
 
+6. **Repetir los pasos 2–5 para las otras dos tablas** (necesarias para WHC y station KPIs):
+
+**Tabla `station_scorecards`** — pegar esta query:
+```sql
+SELECT semana, anio, fecha_semana, centro,
+       overall_score, overall_standing, rank_station, rank_wow,
+       safety_tier, fico, fico_tier, whc_pct, whc_tier,
+       dcr_pct, dcr_tier, dnr_dpmo, dnr_tier,
+       lor_dpmo, lor_tier, pod_pct, pod_tier, cc_pct, cc_tier,
+       ce_dpmo, ce_tier, cdf_dpmo, cdf_tier,
+       speeding_rate, mentor_adoption, vsa_compliance,
+       boc, cas, capacity_next_day, capacity_same_day,
+       focus_area_1, focus_area_2, focus_area_3,
+       uploaded_by, timestamp
+FROM station_scorecards
+ORDER BY fecha_semana DESC
+```
+
+**Tabla `wh_exceptions`** — pegar esta query:
+```sql
+SELECT semana, anio, fecha_semana, centro,
+       driver_id, driver_name,
+       daily_limit_exceeded, weekly_limit_exceeded,
+       under_offwork_limit, workday_limit_exceeded,
+       uploaded_by, timestamp
+FROM wh_exceptions
+ORDER BY fecha_semana DESC
+```
+
 ---
 
 ### Opción B: SQLite Local
@@ -87,14 +116,30 @@ let
     Fechas      = List.Dates(FechaInicio, NumDias, #duration(1,0,0,0)),
     Tabla       = Table.FromList(Fechas, Splitter.SplitByNothing(), {\"Fecha\"}),
     TipoFecha   = Table.TransformColumnTypes(Tabla, {{\"Fecha\", type date}}),
-    Anio        = Table.AddColumn(TipoFecha, \"Año\",        each Date.Year([Fecha]),                  Int64.Type),
-    Trimestre   = Table.AddColumn(Anio,      \"Trimestre\",  each \"Q\" & Text.From(Date.QuarterOfYear([Fecha])), type text),
-    NumSemana   = Table.AddColumn(Trimestre, \"NúmSemana\",  each Date.WeekOfYear([Fecha]),            Int64.Type),
-    SemanaISO   = Table.AddColumn(NumSemana, \"SemanaLabel\",each \"W\" & Text.PadStart(Text.From(Date.WeekOfYear([Fecha])),2,\"0\"), type text),
-    EsFinSemana = Table.AddColumn(SemanaISO, \"EsFinSemana\",each Date.DayOfWeek([Fecha]) >= 5,       type logical)
+    Anio        = Table.AddColumn(TipoFecha,  \"Año\",        each Date.Year([Fecha]),                  Int64.Type),
+    Trimestre   = Table.AddColumn(Anio,       \"Trimestre\",  each \"Q\" & Text.From(Date.QuarterOfYear([Fecha])), type text),
+    // ── Semana ISO 8601 (lunes=día 1) — misma lógica que usa la app ──────────
+    // Thursday de cada fecha determina el año y número de semana ISO
+    ISOSemana   = Table.AddColumn(Trimestre,  \"NúmSemana\",
+        each
+            let d        = [Fecha],
+                dow      = Date.DayOfWeek(d, Day.Monday),
+                thursday = Date.AddDays(d, 3 - dow),
+                yr       = Date.Year(thursday),
+                jan4     = #date(yr, 1, 4),
+                jan4dow  = Date.DayOfWeek(jan4, Day.Monday),
+                wk1start = Date.AddDays(jan4, -jan4dow)
+            in Number.IntegerDivide(Duration.Days(thursday - wk1start), 7) + 1,
+        Int64.Type),
+    SemanaISO   = Table.AddColumn(ISOSemana,  \"SemanaLabel\",
+        each \"W\" & Text.PadStart(Text.From([NúmSemana]), 2, \"0\"), type text),
+    EsFinSemana = Table.AddColumn(SemanaISO,  \"EsFinSemana\",
+        each Date.DayOfWeek([Fecha]) >= 5, type logical)
 in
     EsFinSemana
 ```
+
+> ⚠️ Es **imprescindible** usar este cálculo ISO (no `Date.WeekOfYear` nativo de Power Query, que usa semana US con inicio en domingo). La app almacena semanas ISO — si no coinciden, los slicers de semana no filtrarán correctamente.
 
 4. Renombrar la consulta como **"Calendario"**
 5. Cerrar y aplicar
@@ -106,10 +151,20 @@ in
 En la vista **Modelo**, crear estas relaciones:
 
 ```
-Calendario[Fecha]  →  scorecards[fecha_semana]   (1:N, activa)
+Calendario[Fecha]              →  scorecards[fecha_semana]         (1:N, activa)
+Calendario[Fecha]              →  station_scorecards[fecha_semana] (1:N, activa)
+Calendario[Fecha]              →  wh_exceptions[fecha_semana]      (1:N, activa)
 ```
 
-> v3.9: También puedes filtrar por la columna `anio` directamente en `scorecards` — es un entero (2026) que Power BI puede usar en slicers sin necesitar la tabla Calendario.
+> Si Power BI no permite tres relaciones activas con la misma tabla Calendario, deja activa solo la de `scorecards` y marca las otras dos como **inactivas** — luego úsalas en DAX con `USERELATIONSHIP()`.
+
+**Columnas de segmentación cruzada (opcional pero recomendado):**
+Para que un slicer de `centro` filtre las tres tablas simultáneamente, crear una tabla de dimensión de centros:
+1. **Modelado → Nueva tabla**: `Centros = VALUES(scorecards[centro])`
+2. Relaciones: `Centros[centro] → scorecards[centro]` · `Centros[centro] → station_scorecards[centro]` · `Centros[centro] → wh_exceptions[centro]`
+3. Usar `Centros[centro]` en el slicer de centro.
+
+> v3.9: También puedes filtrar por la columna `anio` directamente en `scorecards` — es un entero (2025, 2026…) que Power BI puede usar en slicers sin necesitar la tabla Calendario.
 
 ---
 
@@ -279,20 +334,35 @@ CALCULATE(DISTINCTCOUNT(scorecards[semana]),
 
 ### GRUPO 7: WHC (v3.9 — datos de excepciones de horas)
 
+> ⚠️ Estas medidas requieren conectar la tabla `wh_exceptions` en Power Query (misma conexión Supabase, tabla adicional).
+
 ```dax
-// Conductores con al menos una excepción WHC
+// Conductores con al menos una excepción WHC en el contexto actual
 Conductores WHC =
 CALCULATE(
     DISTINCTCOUNT(wh_exceptions[driver_id]),
-    wh_exceptions[daily_limit_exceeded]  = 1
-    || wh_exceptions[weekly_limit_exceeded] = 1
-    || wh_exceptions[under_offwork_limit]   = 1
-    || wh_exceptions[workday_limit_exceeded]= 1
+    FILTER(
+        wh_exceptions,
+        wh_exceptions[daily_limit_exceeded]   = 1
+        || wh_exceptions[weekly_limit_exceeded]  = 1
+        || wh_exceptions[under_offwork_limit]    = 1
+        || wh_exceptions[workday_limit_exceeded] = 1
+    )
 )
 
-// Si tienes la tabla wh_exceptions conectada (JOIN por semana+centro):
-WHC Count = SUM(station_scorecards[wh_count])
+// Total de infracciones WHC por tipo
+WHC Daily Exceeded   = SUM(wh_exceptions[daily_limit_exceeded])
+WHC Weekly Exceeded  = SUM(wh_exceptions[weekly_limit_exceeded])
+WHC Under Offwork    = SUM(wh_exceptions[under_offwork_limit])
+WHC Workday Exceeded = SUM(wh_exceptions[workday_limit_exceeded])
 ```
+
+**Relaciones adicionales necesarias en el Modelo:**
+```
+wh_exceptions[semana]  →  scorecards[semana]   (N:N — usar filtro manual)
+wh_exceptions[centro]  →  scorecards[centro]
+```
+> Para cruzar WHC con scorecards, usar un slicer de `semana` y `centro` comunes.
 
 ---
 
@@ -451,7 +521,7 @@ Power BI Service → **Compartir → Obtener vínculo** (requiere cuenta Microso
 - `dcr`, `pod`, `cc`, `fdps`, `cdf` están en formato **decimal 0-1** en la BD (no 0-100)
 - Formatear en Power BI como **Porcentaje** para que muestre 99.2% en vez de 0.992
 - `dnr`, `score`, `entregados`, `fs_count` son números decimales normales
-- `anio` es un entero (2026) — útil para slicers sin necesitar tabla Calendario
+- `anio` es un entero (2025, 2026…) — útil para slicers sin necesitar tabla Calendario
 
 **Sobre las semanas:**
 - El campo `semana` contiene texto: "W05", "W06", etc.
@@ -465,4 +535,4 @@ Power BI Service → **Compartir → Obtener vínculo** (requiere cuenta Microso
 
 ---
 
-*Winiw Quality Scorecard v3.9 · [@pablo25rf](https://github.com/pablo25rf) · Marzo 2026*
+*Winiw Quality Scorecard v3.9 · [@pablo25rf](https://github.com/pablo25rf) · Marzo 2025*
