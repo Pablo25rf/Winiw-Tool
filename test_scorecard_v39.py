@@ -10,8 +10,11 @@ import os
 import sys
 import sqlite3
 import tempfile
+from datetime import datetime
 import pandas as pd
 import numpy as np
+
+_THIS_YEAR = datetime.now().year
 
 os.environ.setdefault("WINIW_ADMIN_USER", "test_admin")
 os.environ.setdefault("WINIW_ADMIN_PASS", "Test_Pass_Seguro_2024!")
@@ -25,7 +28,8 @@ import amazon_scorecard_ultra_robust_v3_FINAL as sc
 
 def make_db():
     """BD SQLite temporal con esquema completo."""
-    tmp = tempfile.mktemp(suffix='.db')
+    fd, tmp = tempfile.mkstemp(suffix='.db')
+    os.close(fd)
     db_config = {'type': 'sqlite', 'path': tmp}
     sc.init_database(db_config)
     conn = sqlite3.connect(tmp)
@@ -971,7 +975,7 @@ class TestSaveToDatabaseV39(unittest.TestCase):
         sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
         anios = [r[0] for r in self.conn.execute(
             "SELECT DISTINCT anio FROM scorecards WHERE semana='W07'").fetchall()]
-        self.assertEqual(anios, [2026])
+        self.assertEqual(anios, [_THIS_YEAR])
 
     def test_driver_name_guardado_correctamente(self):
         sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
@@ -1043,7 +1047,7 @@ class TestSaveWhExceptionsV39(unittest.TestCase):
         sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
         anios = [r[0] for r in self.conn.execute(
             "SELECT DISTINCT anio FROM wh_exceptions").fetchall()]
-        self.assertEqual(anios, [2026])
+        self.assertEqual(anios, [_THIS_YEAR])
 
     def test_idempotente_no_duplica(self):
         sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)

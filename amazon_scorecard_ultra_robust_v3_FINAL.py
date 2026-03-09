@@ -1004,13 +1004,13 @@ def extract_info_from_path(path: str) -> Tuple[str, str, Optional[int]]:
                     pass
     
     # 2. Normalizar Centro (ej: DIC1, VLC1, MAD1, DMA3, ES-TDSL-DIC1)
-    # Busca 3-4 letras seguidas de un número
-    center_match = re.search(r'([A-Z]{3,4}\d)', filename, re.IGNORECASE)
+    # Busca 3-4 letras seguidas de uno o más dígitos
+    center_match = re.search(r'([A-Z]{3,4}\d+)', filename, re.IGNORECASE)
     if center_match:
         center = center_match.group(1).upper()
     else:
         # Buscar en el path si no está en el filename
-        center_match_path = re.search(r'([A-Z]{3,4}\d)', path, re.IGNORECASE)
+        center_match_path = re.search(r'([A-Z]{3,4}\d+)', path, re.IGNORECASE)
         center = center_match_path.group(1).upper() if center_match_path else "TDSL"
 
     # 3. Extraer año si está explícito en el nombre (ej: 2025, 2026...)
@@ -2027,8 +2027,8 @@ def week_to_date(week_str: str, year: int = None) -> str:
         week_num = int(match.group(1))
 
         if year is None:
-            year = 2025
             now = datetime.now()
+            year = now.year
             if now.month <= 2 and week_num > 45:
                 year -= 1
             elif now.month >= 11 and week_num < 8:
@@ -2463,6 +2463,15 @@ def _build_drivers_df(all_rows: list, errors: list) -> pd.DataFrame:
                 'LoR DPMO','POD','CC','CE CDF DPMO', None] — CE y CDF en col[7] y col[8]
       Páginas 4-5: sin cabecera, empiezan directo en datos
     """
+    def to_float(val):
+        """Convierte valor a float; None si es '-', vacío o inválido."""
+        if val in (None, '-', '', 'None'):
+            return None
+        try:
+            return float(str(val).replace('%', '').strip())
+        except (ValueError, TypeError):
+            return None
+
     records = []
     header_skipped = False
 
@@ -2480,15 +2489,6 @@ def _build_drivers_df(all_rows: list, errors: list) -> pd.DataFrame:
         # Saltar filas de título de sección (ej: "DSP WEEKLY SUMMARY")
         if not re.match(r'^[A-Z0-9]{10,20}$', cell0):
             continue
-
-        def to_float(val):
-            """Convierte valor a float; None si es '-', vacío o inválido."""
-            if val in (None, '-', '', 'None'):
-                return None
-            try:
-                return float(str(val).replace('%', '').strip())
-            except (ValueError, TypeError):
-                return None
 
         # DCR, POD, CC vienen como "98.96%" → convertir a ratio 0-1
         # usando la función ya existente safe_percentage()
@@ -2525,6 +2525,9 @@ def _build_wh_df(rows: list, errors: list) -> pd.DataFrame:
                'Under Offwork Limit','Work Day Limit Exceeded','WH Exception']
       row[1..]: ['1','AOX3PX1MTVS0E','No','No','Yes','No','Yes']
     """
+    def to_bool(val):
+        return 1 if str(val or '').strip().lower() == 'yes' else 0
+
     records = []
     for row in rows:
         if not row or not row[0]:
@@ -2540,9 +2543,6 @@ def _build_wh_df(rows: list, errors: list) -> pd.DataFrame:
 
         if len(row) < 6:
             continue
-
-        def to_bool(val):
-            return 1 if str(val or '').strip().lower() == 'yes' else 0
 
         records.append({
             'driver_id':              str(row[1]).strip(),
@@ -2588,7 +2588,7 @@ def parse_dsp_scorecard_pdf(pdf_bytes: bytes) -> dict:
             p1 = pdf.pages[0].extract_text() or ""
 
             # "TDSL at DIC1" → DIC1
-            m = re.search(r'TDSL\s+at\s+([A-Z]{2,5}\d)', p1)
+            m = re.search(r'TDSL\s+at\s+([A-Z]{2,5}\d+)', p1)
             centro = m.group(1).upper() if m else None
 
             # "Week 7" → W07
@@ -2599,27 +2599,24 @@ def parse_dsp_scorecard_pdf(pdf_bytes: bytes) -> dict:
             year = None
             for p in pdf.pages:
                 txt = p.extract_text() or ""
-                # Buscar años 2024-2030 con límites de palabra o rodeados de caracteres no numéricos
-                m = re.search(r'(?<!\d)(202[4-9]|2030)(?!\d)', txt)
+                # Buscar año explícito (20xx) con límites de palabra
+                m = re.search(r'(?<!\d)(20[2-9]\d)(?!\d)', txt)
                 if m:
                     year = int(m.group(1))
                     break
-                
-                # Búsqueda alternativa: fechas completas (ej: 02/15/2025 o 2025-02-15)
-                m = re.search(r'\b(202[4-9])[-/]\d{1,2}[-/]\d{1,2}\b', txt)
+
+                # Búsqueda alternativa: fechas completas (ej: 02/15/2026 o 2026-02-15)
+                m = re.search(r'\b(20[2-9]\d)[-/]\d{1,2}[-/]\d{1,2}\b', txt)
                 if m:
                     year = int(m.group(1))
                     break
-                m = re.search(r'\b\d{1,2}[-/]\d{1,2}[-/](202[4-9])\b', txt)
+                m = re.search(r'\b\d{1,2}[-/]\d{1,2}[-/](20[2-9]\d)\b', txt)
                 if m:
                     year = int(m.group(1))
                     break
             
             if not year:
-                # Si falló la detección pero el nombre del archivo tiene el año...
-                # El filename no siempre está disponible aquí, pero app.py lo tiene.
-                # Como fallback final para evitar 2026 en entorno de desarrollo:
-                year = 2025
+                year = datetime.now().year
             
             if not centro:
                 result['errors'].append("No se detectó el centro en el PDF")
@@ -2669,7 +2666,7 @@ def parse_dsp_scorecard_pdf(pdf_bytes: bytes) -> dict:
 
 def save_station_scorecard(station_data: dict, week: str, center: str,
                            db_config=None, uploaded_by: str = "System",
-                           year: Optional[int] = None) -> bool:
+                           year: Optional[int] = None) -> Tuple[bool, str]:
     """
     Guarda o actualiza los KPIs de estación en station_scorecards.
     UPSERT por (semana, centro) — reemplaza si ya existe.
@@ -2695,7 +2692,7 @@ def save_station_scorecard(station_data: dict, week: str, center: str,
             'uploaded_by',
         ]
 
-        anio_ss = int(fecha[:4]) if fecha else (year or 2025)
+        anio_ss = int(fecha[:4]) if fecha else (year or datetime.now().year)
 
         vals = [
             week, fecha, anio_ss, center,
@@ -2777,7 +2774,7 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
             phs = ", ".join([ph] * len(all_ids))
             
             if year is None:
-                year = 2025
+                year = datetime.now().year
 
             cursor.execute(
                 f"SELECT driver_id FROM scorecards "
@@ -2853,7 +2850,7 @@ def save_wh_exceptions(wh_df: pd.DataFrame, week: str, center: str,
             ph     = '%s' if is_pg else '?'
             fecha  = week_to_date(week, year=year)
 
-            anio_wh = int(fecha[:4]) if fecha else (year or 2025)
+            anio_wh = int(fecha[:4]) if fecha else (year or datetime.now().year)
 
             # ── Lookup driver_name desde scorecards (misma semana, centro y año) ──
             driver_ids = wh_df['driver_id'].astype(str).tolist()

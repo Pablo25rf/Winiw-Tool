@@ -57,13 +57,12 @@ LOGIN_LOCKOUT_MINUTES = 15       # minutos de bloqueo tras agotar intentos
 # ─────────────────────────────────────────────────────────────────────────────
 # BOOTSTRAP: propagar st.secrets → os.environ para el motor (Streamlit Cloud)
 # ─────────────────────────────────────────────────────────────────────────────
-import os as _os
 try:
     for _k in ("WINIW_ADMIN_USER", "WINIW_ADMIN_PASS"):
-        if _k not in _os.environ:
+        if _k not in os.environ:
             _v = st.secrets.get(_k) or st.secrets.get("app", {}).get(_k)
             if _v:
-                _os.environ[_k] = str(_v)
+                os.environ[_k] = str(_v)
 except Exception:
     pass
 
@@ -1741,7 +1740,7 @@ if tab_dsp:
                         _s = _p['station']
                         _c, _w, _yr = _m['centro'], _m['semana'], _m.get('year')
                         if _yr is None:
-                            _yr = 2025
+                            _yr = datetime.now().year
                         try:
                             _ok_st, _err_st = scorecard.save_station_scorecard(
                                 _s, _w, _c, db_config, user_data_session['name'],
