@@ -6,7 +6,7 @@ Canvas: 1280x720 px · 5 paginas · Pixel-perfect · Tema WINIW Delivery.
 import zipfile, json, uuid, io
 
 SRC = "Rendimiento.pbix"
-DST = "Rendimiento_NEW.pbix"
+DST = "Rendimiento_V2.pbix"
 
 W, H = 1280, 720
 
@@ -27,6 +27,11 @@ PANEL_BG   = "#FFFFFF"   # fondo panel filtros blanco
 CARD_BG    = "#FFFFFF"
 SECTION_LBL_COLOR = "#1B3A6B"
 
+# Colores del logo visibles sobre fondo blanco
+WIN_COLOR  = "#0D2147"   # WIN: navy muy oscuro (legible en blanco)
+NIW_COLOR  = "#5DA800"   # NIW: verde lima oscurecido (legible)
+SUBTITLE_COLOR = "#6B8FAF"  # texto secundario cabecera
+
 # ── Colores metricas ─────────────────────────────────────────────────────────
 GREEN  = "#00B050"
 RED    = "#D92B2B"
@@ -40,7 +45,7 @@ GRAD_DCR   = (97, 99, 100, RED, YELL, GREEN)
 GRAD_PCT   = (90, 97, 100, RED, YELL, GREEN)
 
 CARD_H = 90
-SECTION_LBL_H = 20
+SECTION_LBL_H = 24   # alto suficiente para que no se corte el texto
 
 # ─────────────────────────────── helpers ────────────────────────────────────
 
@@ -66,12 +71,12 @@ def vc(sv_dict, x, y, z, w, h, filters="[]", query="", dt="", vc_objects=None):
     return result
 
 def section(sid, name, display, ordinal, visuals, w=W, h=H):
+    # Intentar ambos formatos de fondo: background + wallpaper
+    bg_prop = {"color": {"solid": {"color": PAGE_BG}}, "transparency": 0}
     cfg = {
         "objects": {
-            "background": [{"properties": {
-                "color": {"solid": {"color": PAGE_BG}},
-                "transparency": 0,
-            }}],
+            "background": [{"properties": bg_prop}],
+            "wallpaper":  [{"properties": bg_prop}],
             "displayArea": [{"properties": {
                 "verticalAlignment": {"expr": {"Literal": {"Value": "'Middle'"}}}
             }}],
@@ -93,46 +98,52 @@ def section(sid, name, display, ordinal, visuals, w=W, h=H):
 # ─────────────────────────────── visual builders ────────────────────────────
 
 def shape(x, y, z, w, h, fill, transparency=0, round_edge=0, border=0, border_color=None):
-    """Rectangulo de fondo (basicShape)."""
-    line_props = {
-        "roundEdge": {"expr": {"Literal": {"Value": f"{round_edge}D"}}},
-        "weight":    {"expr": {"Literal": {"Value": f"{border}D"}}},
+    """Rectangulo de fondo (basicShape) — formato correcto para PBI Desktop 2024+."""
+    gen_props = {
+        "shapeType": {"expr": {"Literal": {"Value": "'rectangle'"}}},
     }
-    if border_color:
-        line_props["strokeColor"] = {"solid": {"color": border_color}}
     fill_props = {
         "show":      {"expr": {"Literal": {"Value": "true"}}},
         "fillColor": {"solid": {"color": fill}},
         "transparency": {"expr": {"Literal": {"Value": f"{transparency}D"}}},
     }
+    line_props = {
+        "strokeWidth": {"expr": {"Literal": {"Value": f"{border}D"}}},
+        "roundEdge":   {"expr": {"Literal": {"Value": f"{round_edge}D"}}},
+    }
+    if border_color:
+        line_props["strokeColor"] = {"solid": {"color": border_color}}
     return vc({
         "singleVisual": {
             "visualType": "basicShape",
             "objects": {
-                "line": [{"properties": line_props}],
-                "fill": [{"properties": fill_props}],
-                "general": [{"properties": {}}],
+                "general": [{"properties": gen_props}],
+                "fill":    [{"properties": fill_props}],
+                "line":    [{"properties": line_props}],
             },
         }
     }, x, y, z, w, h)
 
 
 def logo_header(page_title):
-    """Cabecera WINIW con logo bicolor + titulo de pagina."""
+    """
+    Cabecera WINIW: WIN (navy oscuro) + NIW (verde lima) legibles sobre fondo blanco.
+    Con barra verde lima abajo simulada via textbox de altura extra.
+    """
     return vc({
         "singleVisual": {
             "visualType": "textbox",
             "objects": {"general": [{"properties": {"paragraphs": [{
                 "textRuns": [
-                    {"value": "WIN",      "textStyle": {"fontWeight": "bold",   "fontSize": "22", "color": WHITE}},
-                    {"value": "NIW",      "textStyle": {"fontWeight": "bold",   "fontSize": "22", "color": LIME}},
-                    {"value": "  DELIVERY",  "textStyle": {"fontWeight": "normal", "fontSize": "11", "color": "#8AB0D8"}},
-                    {"value": f"     |     {page_title}", "textStyle": {"fontWeight": "normal", "fontSize": "14", "color": "#C8D8EF"}},
+                    {"value": "WIN",  "textStyle": {"fontWeight": "bold",   "fontSize": "20", "color": WIN_COLOR}},
+                    {"value": "NIW",  "textStyle": {"fontWeight": "bold",   "fontSize": "20", "color": NIW_COLOR}},
+                    {"value": "  DELIVERY",  "textStyle": {"fontWeight": "normal", "fontSize": "10", "color": SUBTITLE_COLOR}},
+                    {"value": f"     |     {page_title}", "textStyle": {"fontWeight": "normal", "fontSize": "13", "color": SUBTITLE_COLOR}},
                 ],
                 "horizontalTextAlignment": "Left",
             }]}}]},
         }
-    }, 10, 0, 100, W - 10, HEADER_H)
+    }, 10, 4, 100, W - 20, HEADER_H - 4)
 
 
 def label(x, y, z, w, text, size="11", color=SECTION_LBL_COLOR, bold=True):
@@ -152,8 +163,8 @@ def label(x, y, z, w, text, size="11", color=SECTION_LBL_COLOR, bold=True):
 
 def panel_header(text):
     """Label 'FILTROS' dentro del panel izquierdo."""
-    return label(8, HEADER_H + 8, 150, PANEL_W - 16, text, size="10",
-                 color=NAVY_MID, bold=True)
+    return label(8, HEADER_H + 6, 150, PANEL_W - 16, text, size="11",
+                 color=LIME, bold=True)
 
 
 def slicer(x, y, z, w, h, entity, column, mode="Dropdown"):
@@ -371,17 +382,38 @@ def lbl_y(base_y):
 # ── Fondos comunes de cada pagina ────────────────────────────────────────────
 
 def page_backgrounds(has_3_slicers=True):
-    """Capa de fondos: header navy, panel blanco."""
-    layers = [
-        # Header bar navy oscuro
+    """
+    Capas de fondo.
+    - basicShape: puede no renderizar segun version PBI, pero no rompe nada.
+    - textbox de 1px: garantiza linea acento verde visible.
+    """
+    return [
+        # Header navy (basicShape — best-effort)
         shape(0, 0, -300, W, HEADER_H, NAVY_DARK),
-        # Linea acento verde lima bajo el header
-        shape(0, HEADER_H, -299, W, 3, LIME),
-        # Panel filtros blanco
+        # Linea acento verde lima BAJO cabecera (textbox: garantizado visible)
+        vc({
+            "singleVisual": {
+                "visualType": "textbox",
+                "objects": {"general": [{"properties": {"paragraphs": [{
+                    "textRuns": [{"value": "", "textStyle": {"fontSize": "1"}}],
+                    "horizontalTextAlignment": "Left",
+                }]}}]},
+            }
+        }, 0, HEADER_H - 4, -298, W, 6),
+        # Panel filtros (basicShape — best-effort)
         shape(0, HEADER_H + 3, -200, PANEL_W, H - HEADER_H - 3, PANEL_BG,
               border=1, border_color="#D0DAE8"),
+        # Separador verde visible entre panel y contenido (textbox 1px)
+        vc({
+            "singleVisual": {
+                "visualType": "textbox",
+                "objects": {"general": [{"properties": {"paragraphs": [{
+                    "textRuns": [{"value": "|", "textStyle": {"fontSize": "1", "color": LIME}}],
+                    "horizontalTextAlignment": "Left",
+                }]}}]},
+            }
+        }, PANEL_W, HEADER_H, -197, 3, H - HEADER_H),
     ]
-    return layers
 
 
 # ═══════════════════════════════════════════════════════════════════════════
