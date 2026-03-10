@@ -41,8 +41,10 @@ GRAY   = "#6B7785"
 
 GRAD_SCORE = (55, 70, 100, RED, YELL, GREEN)
 GRAD_DNR   = (833, 1650, 3000, GREEN, YELL, RED)
-GRAD_DCR   = (97, 99, 100, RED, YELL, GREEN)
-GRAD_PCT   = (90, 97, 100, RED, YELL, GREEN)
+GRAD_DCR   = (93, 97, 100, RED, YELL, GREEN)    # fix#3: rango real Amazon (<93 rojo)
+GRAD_CC    = (88, 93, 100, RED, YELL, GREEN)    # fix#4: CC% target Amazon ~93%
+GRAD_POD   = (95, 98, 100, RED, YELL, GREEN)    # fix#4: POD% target Amazon ~98.5%
+GRAD_DPMO  = (500, 2000, 5000, GREEN, YELL, RED) # fix#1: DSC/CDF — invertido menos=mejor
 
 CARD_H = 90
 SECTION_LBL_H = 24   # alto suficiente para que no se corte el texto
@@ -71,8 +73,9 @@ def vc(sv_dict, x, y, z, w, h, filters="[]", query="", dt="", vc_objects=None):
     return result
 
 def section(sid, name, display, ordinal, visuals, w=W, h=H):
-    # Intentar ambos formatos de fondo: background + wallpaper
-    bg_prop = {"color": {"solid": {"color": PAGE_BG}}, "transparency": 0}
+    # fix#7: transparency en formato expr/Literal (requerido por PBI)
+    bg_prop = {"color": {"solid": {"color": PAGE_BG}},
+               "transparency": {"expr": {"Literal": {"Value": "0D"}}}}
     cfg = {
         "objects": {
             "background": [{"properties": bg_prop}],
@@ -240,8 +243,21 @@ def card(x, y, z, w, h, measure, entity="Medidas", gradient=None):
     }, x, y, z, w, h, vc_objects=white_bg)
 
 
+def _ref_line_obj(value, color="#FF9900"):
+    """fix#9: objeto y1AxisReferenceLine para linea de referencia en charts."""
+    return [{"id": "ref_line", "properties": {
+        "show":          {"expr": {"Literal": {"Value": "true"}}},
+        "value":         {"expr": {"Literal": {"Value": f"{value}D"}}},
+        "lineColor":     {"solid": {"color": color}},
+        "transparency":  {"expr": {"Literal": {"Value": "15D"}}},
+        "style":         {"expr": {"Literal": {"Value": "'dashed'"}}},
+        "position":      {"expr": {"Literal": {"Value": "'back'"}}},
+        "dataLabelShow": {"expr": {"Literal": {"Value": "false"}}},
+    }}]
+
+
 def area_chart(x, y, z, w, h, measure, cat_entity, cat_col,
-               series_entity=None, series_col=None):
+               series_entity=None, series_col=None, ref_line=None, y_min=None):
     qref_m = f"Medidas.{measure}"
     qref_c = f"{cat_entity}.{cat_col}"
     from_l = [{"Name": "m", "Entity": "Medidas", "Type": 0},
@@ -264,6 +280,14 @@ def area_chart(x, y, z, w, h, measure, cat_entity, cat_col,
         "color": {"solid": {"color": CARD_BG}},
         "transparency": {"expr": {"Literal": {"Value": "0D"}}},
     }}]}
+    objects = {}
+    if ref_line is not None:
+        objects["y1AxisReferenceLine"] = _ref_line_obj(ref_line)
+    if y_min is not None:  # fix#10: eje Y con minimo configurado
+        objects["valueAxis"] = [{"properties": {
+            "show":  {"expr": {"Literal": {"Value": "true"}}},
+            "start": {"expr": {"Literal": {"Value": f"{y_min}D"}}},
+        }}]
     return vc({
         "singleVisual": {
             "visualType": "areaChart",
@@ -276,21 +300,22 @@ def area_chart(x, y, z, w, h, measure, cat_entity, cat_col,
             },
             "drillFilterOtherVisuals": True,
             "hasDefaultSort": True,
+            "objects": objects,
         }
     }, x, y, z, w, h, vc_objects=white_bg)
 
 
 def line_chart(x, y, z, w, h, measure, cat_entity, cat_col,
-               series_entity=None, series_col=None):
+               series_entity=None, series_col=None, ref_line=None, y_min=None):
     v = area_chart(x, y, z, w, h, measure, cat_entity, cat_col,
-                   series_entity, series_col)
+                   series_entity, series_col, ref_line=ref_line, y_min=y_min)
     cfg = json.loads(v["config"])
     cfg["singleVisual"]["visualType"] = "lineChart"
     v["config"] = json.dumps(cfg)
     return v
 
 
-def bar_chart(x, y, z, w, h, measures, cat_entity, cat_col, horizontal=True):
+def bar_chart(x, y, z, w, h, measures, cat_entity, cat_col, horizontal=True, ref_line=None):
     qref_c = f"{cat_entity}.{cat_col}"
     from_l = [{"Name": "m", "Entity": "Medidas", "Type": 0},
                {"Name": "d", "Entity": cat_entity, "Type": 0}]
@@ -308,6 +333,9 @@ def bar_chart(x, y, z, w, h, measures, cat_entity, cat_col, horizontal=True):
         "color": {"solid": {"color": CARD_BG}},
         "transparency": {"expr": {"Literal": {"Value": "0D"}}},
     }}]}
+    objects = {}
+    if ref_line is not None:
+        objects["y1AxisReferenceLine"] = _ref_line_obj(ref_line)
     return vc({
         "singleVisual": {
             "visualType": vtype,
@@ -320,6 +348,7 @@ def bar_chart(x, y, z, w, h, measures, cat_entity, cat_col, horizontal=True):
             },
             "drillFilterOtherVisuals": True,
             "hasDefaultSort": True,
+            "objects": objects,
         }
     }, x, y, z, w, h, vc_objects=white_bg)
 
@@ -426,19 +455,20 @@ def page1():
 
     # 7 KPI cards — w=143, gap=7 → 7*143+6*7 = 1001+42 = 1043 ≤ 1065
     cw = 143; gap_c = 7
+    # fix#1: DSC/CDF con gradiente; fix#4: CC y POD con gradientes separados
     cards_data = [
         ("Score Global",  GRAD_SCORE),
         ("DCR Promedio",  GRAD_DCR),
         ("DNR (DPMO)",    GRAD_DNR),
-        ("DSC (DPMO)",    None),
-        ("CC %",          GRAD_PCT),
-        ("POD %",         GRAD_PCT),
-        ("CDF (DPMO)",    None),
+        ("DSC (DPMO)",    GRAD_DPMO),
+        ("CC %",          GRAD_CC),
+        ("POD %",         GRAD_POD),
+        ("CDF (DPMO)",    GRAD_DPMO),
     ]
     v_cards = [card(CX + i*(cw+gap_c), CARD_Y, 500+i, cw, CARD_H, m, gradient=g)
                for i, (m, g) in enumerate(cards_data)]
 
-    LW = 522; RW = CW - LW - GAP  # 522 + 6 + 537 = 1065
+    LW = 522; RW = CW - LW - GAP
 
     return [
         *page_backgrounds(),
@@ -448,20 +478,18 @@ def page1():
         slicer(8, TOP_Y + 84,   1001, 186, 78,  E, COL_SEM, "Dropdown"),
         slicer(8, TOP_Y + 170,  1002, 186, 215, E, COL_CEN, "Dropdown"),
         *v_cards,
-        # Charts row
-        label(CX, lbl_y(CHART_Y), 200, LW,
-              "Score Global — Evolucion Semanal por Centro"),
-        area_chart(CX, CHART_Y, 600, LW, CHART_H, "Score Global", E, COL_FEC,
-                   series_entity=E, series_col=COL_CEN),
-        label(CX+LW+GAP, lbl_y(CHART_Y), 201, RW,
-              "Score Promedio — Ranking por Centro"),
+        # fix#2: line_chart en vez de area_chart; fix#9: linea referencia 80
+        label(CX, lbl_y(CHART_Y), 200, LW, "Score — Tendencia Semanal"),
+        line_chart(CX, CHART_Y, 600, LW, CHART_H, "Score Global", E, COL_FEC,
+                   series_entity=E, series_col=COL_CEN, ref_line=80),
+        # fix#9: linea referencia 80 en bar chart de ranking
+        label(CX+LW+GAP, lbl_y(CHART_Y), 201, RW, "Score — Ranking por Centro"),
         bar_chart(CX+LW+GAP, CHART_Y, 610, RW, CHART_H,
-                  ["Score Global"], E, COL_CEN, horizontal=True),
-        # Matrix
-        label(CX, lbl_y(MAT_Y), 202, CW,
-              "Score x Centro x Semana — Heatmap"),
+                  ["Score Global"], E, COL_CEN, horizontal=True, ref_line=80),
+        # fix#5: matriz flat (sin columnas) con 5 metricas — mucho mas legible
+        label(CX, lbl_y(MAT_Y), 202, CW, "Metricas por Centro"),
         matrix(CX, MAT_Y, 700, CW, MAT_H,
-               E, COL_CEN, ["Score Global"], col_entity=E, col_col=COL_SEM),
+               E, COL_CEN, ["Score Global", "DCR Promedio", "DNR (DPMO)", "CC %", "POD %"]),
     ]
 
 
@@ -473,12 +501,13 @@ def page2():
     MAT_Y   = mat_y(CHART_H)
     MAT_H   = H - MAT_Y - GAP
 
-    cw4 = 258; gap4 = 9   # 4*258+3*9 = 1032+27 = 1059 ≤ 1065
+    cw4 = 258; gap4 = 9
+    # fix#4: POD con su propio gradiente
     cards4 = [
         ("Score Global", GRAD_SCORE),
         ("DCR Promedio", GRAD_DCR),
         ("DNR (DPMO)",   GRAD_DNR),
-        ("POD %",        GRAD_PCT),
+        ("POD %",        GRAD_POD),
     ]
     v_cards = [card(CX + i*(cw4+gap4), CARD_Y, 500+i, cw4, CARD_H, m, gradient=g)
                for i, (m, g) in enumerate(cards4)]
@@ -492,16 +521,14 @@ def page2():
         slicer(8, TOP_Y + 24,  1000, 186, 52, E, COL_ANO, "Dropdown"),
         slicer(8, TOP_Y + 84,  1001, 186, 78, E, COL_SEM, "Dropdown"),
         *v_cards,
-        label(CX, lbl_y(CHART_Y), 200, LW,
-              "Score Promedio — Por Centro (mayor → menor)"),
+        # fix#6: labels mas cortos; fix#9: linea 80 en Score
+        label(CX, lbl_y(CHART_Y), 200, LW, "Score — Ranking por Centro"),
         bar_chart(CX, CHART_Y, 600, LW, CHART_H,
-                  ["Score Global"], E, COL_CEN, horizontal=True),
-        label(CX+LW+GAP, lbl_y(CHART_Y), 201, RW,
-              "DNR (DPMO) — Por Centro (menor = mejor)"),
+                  ["Score Global"], E, COL_CEN, horizontal=True, ref_line=80),
+        label(CX+LW+GAP, lbl_y(CHART_Y), 201, RW, "DNR (DPMO) — Por Centro"),
         bar_chart(CX+LW+GAP, CHART_Y, 610, RW, CHART_H,
                   ["DNR (DPMO)"], E, COL_CEN, horizontal=True),
-        label(CX, lbl_y(MAT_Y), 202, CW,
-              "Todas las Metricas por Centro"),
+        label(CX, lbl_y(MAT_Y), 202, CW, "Todas las Metricas por Centro"),
         matrix(CX, MAT_Y, 700, CW, MAT_H,
                E, COL_CEN,
                ["Score Global", "DCR Promedio", "DNR (DPMO)", "CC %", "POD %", "CDF (DPMO)"]),
@@ -535,16 +562,15 @@ def page3():
         slicer(8, TOP_Y + 24,   1000, 186, 52,  E, COL_ANO, "Dropdown"),
         slicer(8, TOP_Y + 84,   1001, 186, 215, E, COL_CEN, "Dropdown"),
         *v_cards,
-        label(CX, lbl_y(CHART_Y), 200, CW,
-              "Score Global — Tendencia Semanal (linea por Centro)"),
+        # fix#9: linea referencia 80 en Score; fix#6: labels cortos
+        label(CX, lbl_y(CHART_Y), 200, CW, "Score — Tendencia Semanal por Centro"),
         line_chart(CX, CHART_Y, 600, CW, CH1, "Score Global", E, COL_FEC,
-                   series_entity=E, series_col=COL_CEN),
-        label(CX, lbl_y(CY2), 201, LW,
-              "DCR Promedio — Evolucion"),
+                   series_entity=E, series_col=COL_CEN, ref_line=80),
+        # fix#10: DCR eje Y desde 90 (evita eje comprimido 95-100%)
+        label(CX, lbl_y(CY2), 201, LW, "DCR Promedio — Evolucion"),
         line_chart(CX, CY2, 610, LW, CH2, "DCR Promedio", E, COL_FEC,
-                   series_entity=E, series_col=COL_CEN),
-        label(CX+LW+GAP, lbl_y(CY2), 202, RW,
-              "DNR (DPMO) — Evolucion"),
+                   series_entity=E, series_col=COL_CEN, y_min=90),
+        label(CX+LW+GAP, lbl_y(CY2), 202, RW, "DNR (DPMO) — Evolucion"),
         line_chart(CX+LW+GAP, CY2, 620, RW, CH2, "DNR (DPMO)", E, COL_FEC,
                    series_entity=E, series_col=COL_CEN),
     ]
@@ -559,11 +585,12 @@ def page4():
     MAT_H   = H - MAT_Y - GAP
 
     cw4 = 258; gap4 = 9
+    # fix#1: CDF/DSC con gradiente DPMO; fix#4: CC y POD con gradientes separados
     cards4 = [
-        ("CC %",       GRAD_PCT),
-        ("POD %",      GRAD_PCT),
-        ("CDF (DPMO)", None),
-        ("DSC (DPMO)", None),
+        ("CC %",       GRAD_CC),
+        ("POD %",      GRAD_POD),
+        ("CDF (DPMO)", GRAD_DPMO),
+        ("DSC (DPMO)", GRAD_DPMO),
     ]
     v_cards = [card(CX + i*(cw4+gap4), CARD_Y, 500+i, cw4, CARD_H, m, gradient=g)
                for i, (m, g) in enumerate(cards4)]
@@ -578,16 +605,14 @@ def page4():
         slicer(8, TOP_Y + 84,   1001, 186, 78,  E, COL_SEM, "Dropdown"),
         slicer(8, TOP_Y + 170,  1002, 186, 215, E, COL_CEN, "Dropdown"),
         *v_cards,
-        label(CX, lbl_y(CHART_Y), 200, LW,
-              "CC % (Contacto con Cliente) — Por Centro"),
+        # fix#6: labels cortos
+        label(CX, lbl_y(CHART_Y), 200, LW, "CC % — Por Centro"),
         bar_chart(CX, CHART_Y, 600, LW, CHART_H,
                   ["CC %"], E, COL_CEN, horizontal=True),
-        label(CX+LW+GAP, lbl_y(CHART_Y), 201, RW,
-              "POD % (Prueba de Entrega) — Por Centro"),
+        label(CX+LW+GAP, lbl_y(CHART_Y), 201, RW, "POD % — Por Centro"),
         bar_chart(CX+LW+GAP, CHART_Y, 610, RW, CHART_H,
                   ["POD %"], E, COL_CEN, horizontal=True),
-        label(CX, lbl_y(MAT_Y), 202, CW,
-              "Compliance Completo: CC / POD / CDF / DSC por Centro"),
+        label(CX, lbl_y(MAT_Y), 202, CW, "Compliance por Centro: CC / POD / CDF / DSC"),
         matrix(CX, MAT_Y, 700, CW, MAT_H,
                E, COL_CEN, ["CC %", "POD %", "CDF (DPMO)", "DSC (DPMO)"]),
     ]
@@ -620,12 +645,11 @@ def page5():
         slicer(8, TOP_Y + 84,   1001, 186, 78,  E, COL_SEM, "Dropdown"),
         slicer(8, TOP_Y + 170,  1002, 186, 215, E, COL_CEN, "Dropdown"),
         *v_cards,
-        label(CX, lbl_y(CHART_Y), 200, CW,
-              "Score Global — Vision Consolidada por Centro y Semana"),
-        area_chart(CX, CHART_Y, 600, CW, CH1, "Score Global", E, COL_FEC,
-                   series_entity=E, series_col=COL_CEN),
-        label(CX, lbl_y(CY2), 201, LW,
-              "CC % y POD % — Ranking Comparativo por Centro"),
+        # fix#2: line_chart; fix#9: linea referencia 80; fix#6: label corto
+        label(CX, lbl_y(CHART_Y), 200, CW, "Score — Vision por Centro y Semana"),
+        line_chart(CX, CHART_Y, 600, CW, CH1, "Score Global", E, COL_FEC,
+                   series_entity=E, series_col=COL_CEN, ref_line=80),
+        label(CX, lbl_y(CY2), 201, LW, "CC % y POD % — Por Centro"),
         bar_chart(CX, CY2, 610, LW, CH2,
                   ["CC %", "POD %"], E, COL_CEN, horizontal=True),
         label(CX+LW+GAP, lbl_y(CY2), 202, RW,
@@ -646,11 +670,37 @@ def build_layout(orig):
         section(3, uid(), "Compliance y Calidad",   3, page4()),
         section(4, uid(), "Vista Completa",         4, page5()),
     ]
+
+    # fix#8: Inyectar tema WINIW en themeCollection del report config
+    # Aplica: dataColors corporativos (navy/lime) + fondo pagina
+    try:
+        cfg = json.loads(orig.get("config", "{}"))
+        cfg.setdefault("themeCollection", {})["customTheme"] = {
+            "name": "WiniwDelivery",
+            "version": "2.0",
+            "dataColors": [
+                "#1B3A6B",  # navy (WIN) — 1a serie
+                "#7DC400",  # lima (NIW) — 2a serie
+                "#E6732E",  # naranja
+                "#D92B2B",  # rojo
+                "#F5C518",  # amarillo
+                "#4ECDC4",  # teal
+                "#45B7D1",  # azul claro
+                "#96CEB4",  # menta
+            ],
+            "background": PAGE_BG,
+            "foreground": "#252423",
+            "tableAccent": LIME,
+        }
+        new_cfg = json.dumps(cfg)
+    except Exception:
+        new_cfg = orig.get("config", "{}")
+
     return {
         "id": orig.get("id", 0),
         "resourcePackages": orig.get("resourcePackages", []),
         "sections": sections,
-        "config": orig.get("config", "{}"),
+        "config": new_cfg,
         "layoutOptimization": orig.get("layoutOptimization", 0),
     }
 
