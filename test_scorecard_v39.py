@@ -1166,7 +1166,7 @@ class TestRegresionesV39(unittest.TestCase):
         self.assertIn('wh_exceptions', src)
 
     def test_version_motor_es_v39(self):
-        src = open(sc.__file__).read()[:300]
+        src = open(sc.__file__, encoding='utf-8').read()[:300]
         self.assertIn('v3.9', src)
 
 

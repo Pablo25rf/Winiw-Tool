@@ -2930,7 +2930,7 @@ def get_station_scorecards(db_config=None) -> pd.DataFrame:
                     SELECT semana, centro, anio, COUNT(*) AS wh_count
                     FROM wh_exceptions
                     GROUP BY semana, centro, anio
-                ) wh ON ss.semana = wh.semana AND ss.centro = wh.centro AND ss.anio = wh.anio
+                ) wh ON ss.semana = wh.semana AND ss.centro = wh.centro AND (ss.anio = wh.anio OR ss.anio IS NULL)
                 ORDER BY ss.centro ASC, ss.semana DESC
             """
             df = pd.read_sql_query(query, conn)
