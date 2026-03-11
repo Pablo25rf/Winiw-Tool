@@ -954,6 +954,125 @@ def calculate_score_v3_robust(row: pd.Series, targets: Optional[Dict] = None) ->
     
     return calificacion, ", ".join(issues) if issues else "Óptimo", score
 
+
+def calculate_score_pdf_mode(row: pd.Series, targets: Optional[Dict] = None) -> Tuple[str, str, int]:
+    """
+    Scoring basado en PDF del scorecard + Concessions CSV.
+    Usa DPMO reales de Amazon (DSC, LoR, CDF) en vez de conteos de CSV.
+    CE (Customer Escalations) penaliza directamente.
+    """
+    t = dict(Config.DEFAULT_TARGETS)
+    if targets:
+        t.update(targets)
+
+    dnr      = safe_number(row.get('DNR', 0), 0)
+    rts      = safe_number(row.get('RTS', 0.0), 0.0)
+    dcr      = safe_number(row.get('DCR', 1.0), 1.0)
+    pod      = safe_number(row.get('POD', 1.0), 1.0)
+    cc       = safe_number(row.get('CC', 1.0), 1.0)
+    dsc_dpmo = safe_number(row.get('FS_Count', 0), 0)
+    lor_dpmo = safe_number(row.get('DNR_RISK_EVENTS', 0), 0)
+    cdf_rate = safe_number(row.get('CDF', 1.0), 1.0)
+    cdf_dpmo = (1.0 - min(max(cdf_rate, 0.0), 1.0)) * 1_000_000
+    ce       = safe_number(row.get('CE', 0), 0)
+
+    dnr = max(0, min(dnr, Config.MAX_DNR))
+    dcr = max(0, min(dcr, 1.0))
+    pod = max(0, min(pod, 1.0))
+    cc  = max(0, min(cc,  1.0))
+    rts = max(0, min(rts, 1.0))
+
+    issues = []
+    score  = 100
+
+    # === DNR ===
+    if dnr >= 4:
+        issues.append(f"🚨 {int(dnr)} DNR (CRÍTICO)")
+        score -= 70
+    elif dnr >= 3:
+        issues.append(f"🚨 {int(dnr)} DNR (MUY GRAVE)")
+        score -= 60
+    elif dnr > t['target_dnr'] * 3:
+        issues.append(f"⚡ {int(dnr)} DNR")
+        score -= 25
+    elif dnr > t['target_dnr']:
+        issues.append(f"⚡ {int(dnr)} DNR")
+        score -= 15
+
+    # === DCR ===
+    if dcr < t['target_dcr'] - 0.05:
+        issues.append(f"📦 DCR Crítico {dcr:.1%}")
+        score -= 40
+    elif dcr < t['target_dcr']:
+        issues.append(f"📦 DCR Bajo {dcr:.1%}")
+        score -= 15
+
+    # === POD ===
+    if pod < t['target_pod'] - 0.10:
+        issues.append(f"📸 POD Crítico {pod:.1%}")
+        score -= 25
+    elif pod < t['target_pod']:
+        issues.append(f"📸 POD Bajo {pod:.1%}")
+        score -= 10
+
+    # === CC ===
+    if cc < t['target_cc']:
+        issues.append(f"📞 CC Bajo {cc:.1%}")
+        score -= 10
+
+    # === DSC DPMO (Scanner Compliance) — umbrales Amazon SLS ===
+    if dsc_dpmo > 1490:
+        issues.append(f"🔍 DSC {int(dsc_dpmo)} DPMO (CRÍTICO)")
+        score -= 30
+    elif dsc_dpmo > 930:
+        issues.append(f"🔍 DSC {int(dsc_dpmo)} DPMO")
+        score -= 10
+
+    # === LoR DPMO (Loss or Return) — umbrales Amazon SLS ===
+    if lor_dpmo > 110:
+        issues.append(f"📬 LoR {int(lor_dpmo)} DPMO (CRÍTICO)")
+        score -= 25
+    elif lor_dpmo > 35:
+        issues.append(f"📬 LoR {int(lor_dpmo)} DPMO")
+        score -= 10
+
+    # === CDF DPMO (Customer Delivery Feedback) — umbrales Amazon SLS ===
+    if cdf_dpmo > 355:
+        issues.append(f"⭐ CDF {int(cdf_dpmo)} DPMO (CRÍTICO)")
+        score -= 20
+    elif cdf_dpmo > 165:
+        issues.append(f"⭐ CDF {int(cdf_dpmo)} DPMO")
+        score -= 8
+
+    # === CE (Customer Escalations) ===
+    if ce >= 2:
+        issues.append(f"🚨 {int(ce)} Escalaciones CE")
+        score -= min(int(ce) * 15, 30)
+    elif ce == 1:
+        issues.append(f"🚨 1 Escalación CE")
+        score -= 15
+
+    # === RTS ===
+    if rts > t.get('target_rts', 0.01) * 2:
+        issues.append(f"🔄 RTS Alto {rts:.1%}")
+        score -= 15
+    elif rts > t.get('target_rts', 0.01):
+        issues.append(f"🔄 RTS {rts:.1%}")
+        score -= 8
+
+    score = max(0, score)
+
+    if score >= 90:
+        calificacion = "💎 FANTASTIC"
+    elif score >= 80:
+        calificacion = "🥇 GREAT"
+    elif score >= 60:
+        calificacion = "⚠️ FAIR"
+    else:
+        calificacion = "🛑 POOR"
+
+    return calificacion, ", ".join(issues) if issues else "Óptimo", score
+
 # ═══════════════════════════════════════════════════════════════
 # GENERACIÓN DE EXCEL
 # ═══════════════════════════════════════════════════════════════
@@ -1372,6 +1491,103 @@ def process_single_batch(path_concessions, path_quality=None, path_false_scan=No
         return df_merged
     except Exception as e:
         logger.error(f"Error en procesamiento: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def process_from_pdf_and_concessions(
+        pdf_bytes: bytes,
+        concessions_df: pd.DataFrame,
+        targets: Optional[Dict] = None) -> Optional[pd.DataFrame]:
+    """
+    Nuevo flujo simplificado: PDF del scorecard semanal + archivo Concessions CSV.
+
+    El PDF aporta: DCR, POD, CC, DSC DPMO, LoR DPMO, CDF DPMO, CE por DA.
+    El Concessions CSV aporta: Nombre, ID, DNR, RTS, Entregados.
+
+    Retorna un DataFrame compatible con save_to_database().
+    Columnas reutilizadas para almacenar DPMO sin cambiar el esquema DB:
+      FS_Count        ← DSC DPMO (raw)
+      DNR_RISK_EVENTS ← LoR DPMO (raw)
+      CDF             ← 1 - CDF_DPMO / 1_000_000  (ratio 0-1)
+    CE y los DPMO raw también se añaden al campo DETALLES.
+    """
+    try:
+        df_conc = process_concessions(concessions_df)
+        if df_conc is None or df_conc.empty:
+            logger.error("process_from_pdf_and_concessions: Concessions vacío o inválido")
+            return None
+
+        pdf_result = parse_dsp_scorecard_pdf(pdf_bytes)
+        if not pdf_result.get('ok'):
+            logger.error(f"process_from_pdf_and_concessions: Error PDF — {pdf_result.get('errors', [])}")
+            return None
+
+        df_drivers = pdf_result.get('drivers', pd.DataFrame())
+        if df_drivers.empty:
+            logger.error("process_from_pdf_and_concessions: sin tabla de conductores en el PDF")
+            return None
+
+        logger.info(f"PDF conductores: {len(df_drivers)} | Concessions: {len(df_conc)}")
+
+        df_merged = df_conc.merge(df_drivers, left_on='ID', right_on='driver_id', how='left')
+
+        def _col(col_name, fill=0.0):
+            if col_name in df_merged.columns:
+                return pd.to_numeric(df_merged[col_name], errors='coerce').fillna(fill)
+            return pd.Series([fill] * len(df_merged), index=df_merged.index)
+
+        for src_col, dst_col, default in [
+            ('dcr_oficial', 'DCR', 1.0),
+            ('pod_oficial', 'POD', 1.0),
+            ('cc_oficial',  'CC',  1.0),
+        ]:
+            df_merged[dst_col] = _col(src_col, default).clip(0.0, 1.0)
+
+        df_merged['CDF'] = (1.0 - _col('cdf_dpmo_oficial', 0) / 1_000_000).clip(0.0, 1.0)
+        df_merged['FS_Count'] = _col('dsc_dpmo', 0).clip(lower=0)
+        df_merged['DNR_RISK_EVENTS'] = _col('lor_dpmo', 0).clip(lower=0)
+        df_merged['CE'] = _col('ce_dpmo', 0).clip(lower=0)
+
+        if 'entregados_oficial' in df_merged.columns:
+            mask_ent = df_merged['Entregados'].isna() | (df_merged['Entregados'] == 0)
+            df_merged['Entregados'] = np.where(
+                mask_ent,
+                pd.to_numeric(df_merged['entregados_oficial'], errors='coerce').fillna(0),
+                df_merged['Entregados']
+            )
+
+        df_merged['FDPS'] = 1.0
+
+        df_merged['DNR'] = pd.to_numeric(df_merged['DNR'], errors='coerce').fillna(0.0).clip(upper=Config.MAX_DNR)
+
+        df_merged = df_merged.drop_duplicates(subset='ID', keep='first')
+
+        results = df_merged.apply(
+            lambda x: calculate_score_pdf_mode(x, targets=targets), axis=1, result_type='expand'
+        )
+        df_merged['CALIFICACION'] = results[0]
+        df_merged['DETALLES']     = results[1]
+        df_merged['SCORE']        = results[2]
+
+        def _enrich_detalles(row):
+            base  = str(row.get('DETALLES', ''))
+            dsc   = int(safe_number(row.get('FS_Count', 0), 0))
+            lor   = int(safe_number(row.get('DNR_RISK_EVENTS', 0), 0))
+            cdf_d = int((1.0 - min(max(safe_number(row.get('CDF', 1.0), 1.0), 0.0), 1.0)) * 1_000_000)
+            ce    = int(safe_number(row.get('CE', 0), 0))
+            suffix = f" | DSC:{dsc} LoR:{lor} CDF:{cdf_d} CE={ce}"
+            return (base + suffix) if base != 'Óptimo' else 'Óptimo' + suffix
+
+        df_merged['DETALLES'] = df_merged.apply(_enrich_detalles, axis=1)
+
+        matched = df_merged['DCR'].notna().sum()
+        logger.info(f"✅ PDF+Concessions: {len(df_merged)} conductores ({matched} con datos PDF)")
+        return df_merged
+
+    except Exception as exc:
+        logger.error(f"Error en process_from_pdf_and_concessions: {exc}")
         import traceback
         traceback.print_exc()
         return None
