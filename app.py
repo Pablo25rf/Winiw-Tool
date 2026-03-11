@@ -1002,10 +1002,10 @@ st.markdown("""
 st.markdown("---")
 
 if is_admin:
-    tabs = st.tabs(["🏢 Dashboard", "🚀 Procesamiento", "📋 DSP Scorecard", "📊 Scorecard", "📈 Histórico", "👤 Perfil", "👑 Admin"])
+    tabs = st.tabs(["🏢 Dashboard", "📤 Subir Métricas", "📋 Scorecards Estación", "📊 Métricas DAs", "📈 Histórico", "👤 Perfil", "👑 Admin"])
     tab_dash, tab_proc, tab_dsp, tab_excel, tab_hist, tab_profile, tab_admin = tabs
 else:
-    tabs = st.tabs(["📊 Scorecard", "📈 Histórico", "👤 Perfil"])
+    tabs = st.tabs(["📊 Métricas DAs", "📈 Histórico", "👤 Perfil"])
     tab_excel, tab_hist, tab_profile = tabs
     tab_dash = tab_proc = tab_dsp = tab_admin = None
 
@@ -1318,8 +1318,8 @@ if tab_dash:
 
 if tab_proc:
     with tab_proc:
-        st.header("🚀 Procesamiento de Archivos")
-        st.markdown("Sube los archivos semanales de Amazon para generar el scorecard automático.")
+        st.header("📤 Subir Métricas DAs")
+        st.markdown("Sube los archivos semanales de Amazon para calcular las métricas por conductor (Concessions, Quality, False Scan, DWC, FDPS).")
 
         uploaded_files = st.file_uploader(
             "📁 Arrastra o selecciona archivos",
@@ -1404,7 +1404,7 @@ if tab_proc:
                                                help="Porcentaje mínimo de CC (80–100%)") / 100
 
                     st.divider()
-                    if st.button(f"🚀 Generar Scorecard {center} — {week}", key=f"btn_{center}_{week}",
+                    if st.button(f"🚀 Procesar Métricas {center} — {week}", key=f"btn_{center}_{week}",
                                  type="primary", use_container_width=True):
                         if not data['concessions']:
                             st.error("❌ Se requiere al menos un archivo de 'Concessions'")
@@ -1634,8 +1634,8 @@ if tab_proc:
 
 if tab_dsp:
     with tab_dsp:
-        st.header("📋 DSP Weekly Scorecard — PDF oficial Amazon")
-        st.markdown("Sube los PDFs semanales para guardar KPIs oficiales de estación y actualizar métricas de conductores.")
+        st.header("📋 Scorecards Estación — PDF oficial Amazon")
+        st.markdown("Sube los PDFs semanales de Amazon (1 por estación/semana) para guardar los KPIs oficiales de estación en la BD.")
 
         _last_result = st.session_state.pop('_dsp_last_result', None)
         if _last_result:
@@ -1917,7 +1917,7 @@ if tab_dsp:
                                 st.warning(f"⚠️ Campos no encontrados: {', '.join(_p['errors'])}")
 
         st.divider()
-        st.subheader("📊 Histórico DSP Scorecard por Estación")
+        st.subheader("📊 Histórico Scorecards Estación (BD)")
         try:
             df_ss = scorecard.get_station_scorecards(db_config)
             if df_ss.empty:
@@ -2009,7 +2009,7 @@ if tab_dsp:
 # ─────────────────────────────────────────────────────────────────────────────
 
 with tab_excel:
-    st.header("📊 Scorecard Semanal")
+    st.header("📊 Métricas DAs")
 
     try:
         # Semanas visibles según rol
@@ -2028,8 +2028,13 @@ with tab_excel:
             df_available = df_available[df_available['centro'] == JT_CENTRO]
 
         if df_available.empty:
-            st.info("📭 No hay scorecards disponibles. Procesa archivos primero.")
+            st.info("📭 No hay métricas disponibles. Sube archivos en 'Subir Métricas' primero.")
         else:
+            if is_admin and active_weeks:
+                st.caption(
+                    f"📅 Mostrando las **{len(active_weeks)} semanas más recientes** "
+                    f"({', '.join(active_weeks)}). El histórico completo está en el tab 📈 Histórico."
+                )
             if is_jt and allowed:
                 st.info(
                     f"👔 Tienes acceso a: **{' y '.join(allowed)}** "
@@ -2048,7 +2053,7 @@ with tab_excel:
                 selected_week = st.selectbox("📅 Semana", weeks_for_center)
 
             # Botón o auto-load
-            load_btn = st.button("📊 Cargar Scorecard", type="primary", use_container_width=True)
+            load_btn = st.button("📊 Cargar Métricas", type="primary", use_container_width=True)
 
             if load_btn:
                 st.session_state['sc_week']   = selected_week
@@ -2673,7 +2678,7 @@ with tab_excel:
 # ─────────────────────────────────────────────────────────────────────────────
 
 with tab_hist:
-    st.header("📈 Histórico de Scorecards")
+    st.header("📈 Histórico de Métricas DAs")
 
     try:
         # JTs: solo semanas permitidas + centro asignado si tiene. Admins: todo.
