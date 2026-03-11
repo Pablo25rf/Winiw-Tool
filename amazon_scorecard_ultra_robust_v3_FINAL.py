@@ -1275,18 +1275,27 @@ def create_professional_excel(df: pd.DataFrame, output_path: str,
         logger.error(f"❌ Error Dashboard Excel: {str(e)}")
         return False
 
-def delete_scorecard_batch(week: str, center: str, db_config: Optional[Dict] = None) -> bool:
-    """Elimina los datos de una semana y centro específicos (Para corregir errores de volcado)"""
+def delete_scorecard_batch(week: str, center: str, db_config: Optional[Dict] = None,
+                           year: Optional[int] = None) -> bool:
+    """Elimina los datos de una semana y centro específicos (Para corregir errores de volcado).
+    Si year es None, elimina TODOS los años para ese centro+semana.
+    Si year es un int, elimina solo ese año concreto.
+    """
     try:
+        is_pg = db_config and db_config.get('type') == 'postgresql'
+        ph = '%s' if is_pg else '?'
         with db_connection(db_config) as conn:
             cursor = conn.cursor()
-            q = ("DELETE FROM scorecards WHERE semana = %s AND centro = %s"
-                 if db_config and db_config.get('type') == 'postgresql'
-                 else "DELETE FROM scorecards WHERE semana = ? AND centro = ?")
-            cursor.execute(q, (week, center))
+            if year is not None:
+                q = (f"DELETE FROM scorecards WHERE semana = {ph} AND centro = {ph} AND anio = {ph}")
+                cursor.execute(q, (week, center, year))
+            else:
+                q = (f"DELETE FROM scorecards WHERE semana = {ph} AND centro = {ph}")
+                cursor.execute(q, (week, center))
             rows = cursor.rowcount
             conn.commit()
-        logger.info(f"🗑️ Se eliminaron {rows} registros previos de {center} para la semana {week}.")
+        logger.info(f"🗑️ Se eliminaron {rows} registros de {center} semana {week}" +
+                    (f" año {year}" if year else " (todos los años)"))
         return True
     except Exception as e:
         logger.error(f"Error eliminando lote: {e}")
@@ -1998,13 +2007,17 @@ def check_login_locked(username: str, db_config: Optional[Dict] = None) -> Tuple
 def reset_production_database(db_config: Optional[Dict] = None):
     """Limpia todos los datos de scorecards para empezar de cero (Mantiene usuarios y targets)"""
     try:
+        is_pg = db_config and db_config.get('type') == 'postgresql'
         with db_connection(db_config) as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "TRUNCATE TABLE scorecards RESTART IDENTITY"
-                if db_config and db_config.get('type') == 'postgresql'
-                else "DELETE FROM scorecards"
-            )
+            if is_pg:
+                cursor.execute("TRUNCATE TABLE scorecards RESTART IDENTITY CASCADE")
+                cursor.execute("TRUNCATE TABLE station_scorecards RESTART IDENTITY CASCADE")
+                cursor.execute("TRUNCATE TABLE wh_exceptions RESTART IDENTITY CASCADE")
+            else:
+                cursor.execute("DELETE FROM scorecards")
+                cursor.execute("DELETE FROM station_scorecards")
+                cursor.execute("DELETE FROM wh_exceptions")
             conn.commit()
         return True
     except Exception as e:
@@ -2017,22 +2030,21 @@ def week_to_date(week_str: str, year: int = None) -> str:
     """Convierte un string de semana 'W05' a la fecha del lunes de esa semana"""
     try:
         if not week_str or week_str == "N/A":
-            return datetime.now().strftime("%Y-%m-%d")
+            return "2025-01-06"
         
         # Extraer número de semana
         match = re.search(r'(\d+)', week_str)
         if not match:
-            return datetime.now().strftime("%Y-%m-%d")
+            return "2025-01-06"
             
         week_num = int(match.group(1))
 
         if year is None:
-            now = datetime.now()
-            year = now.year
-            if now.month <= 2 and week_num > 45:
+            year = 2025
+            if week_num > 45:
                 year -= 1
-            elif now.month >= 11 and week_num < 8:
-                year += 1
+            elif week_num < 8:
+                pass
 
         # Cálculo ISO: 4 de enero es siempre semana 1
         d = datetime(year, 1, 4)
@@ -2040,7 +2052,7 @@ def week_to_date(week_str: str, year: int = None) -> str:
         start_date = d - timedelta(days=d.weekday()) + timedelta(weeks=week_num-1)
         return start_date.strftime("%Y-%m-%d")
     except (ValueError, TypeError, AttributeError):
-        return datetime.now().strftime("%Y-%m-%d")
+        return "2025-01-06"
 
 def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Optional[Dict] = None,
                      uploaded_by: str = "System", clean_first: bool = True,
@@ -2616,7 +2628,7 @@ def parse_dsp_scorecard_pdf(pdf_bytes: bytes) -> dict:
                     break
             
             if not year:
-                year = datetime.now().year
+                year = 2025
             
             if not centro:
                 result['errors'].append("No se detectó el centro en el PDF")
@@ -2692,7 +2704,7 @@ def save_station_scorecard(station_data: dict, week: str, center: str,
             'uploaded_by',
         ]
 
-        anio_ss = int(fecha[:4]) if fecha else (year or datetime.now().year)
+        anio_ss = int(fecha[:4]) if fecha else (year or 2025)
 
         vals = [
             week, fecha, anio_ss, center,
@@ -2774,7 +2786,7 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
             phs = ", ".join([ph] * len(all_ids))
             
             if year is None:
-                year = datetime.now().year
+                year = 2025
 
             cursor.execute(
                 f"SELECT driver_id FROM scorecards "
@@ -2850,7 +2862,7 @@ def save_wh_exceptions(wh_df: pd.DataFrame, week: str, center: str,
             ph     = '%s' if is_pg else '?'
             fecha  = week_to_date(week, year=year)
 
-            anio_wh = int(fecha[:4]) if fecha else (year or datetime.now().year)
+            anio_wh = int(fecha[:4]) if fecha else (year or 2025)
 
             # ── Lookup driver_name desde scorecards (misma semana, centro y año) ──
             driver_ids = wh_df['driver_id'].astype(str).tolist()

@@ -1740,7 +1740,7 @@ if tab_dsp:
                         _s = _p['station']
                         _c, _w, _yr = _m['centro'], _m['semana'], _m.get('year')
                         if _yr is None:
-                            _yr = datetime.now().year
+                            _yr = 2025
                         try:
                             _ok_st, _err_st = scorecard.save_station_scorecard(
                                 _s, _w, _c, db_config, user_data_session['name'],
@@ -1779,141 +1779,141 @@ if tab_dsp:
                     key=f"_dsp_show_detail_{_pdf_key[:40]}"
                 )
                 if _show_detail:
-                 for _p in _ok_parsed:
-                    _m = _p['meta']
-                    _s = _p['station']
-                    _icon = _tier_color.get(_s.get('overall_standing', ''), '⚪')
-                    _exp_title = (
-                        f"{_icon} {_m['centro']} — {_m['semana']}/{_m.get('year','')} · "
-                        f"Score {_s.get('overall_score')} ({_s.get('overall_standing')}) · "
-                        f"Rank #{_s.get('rank_station')}"
-                    )
-                    with st.expander(_exp_title, expanded=False):
-                        _rw  = _s.get('rank_wow')
-                        _tc  = _tier_color
-                        _ost = _s.get('overall_standing', '')
+                    for _p in _ok_parsed:
+                        _m = _p['meta']
+                        _s = _p['station']
+                        _icon = _tier_color.get(_s.get('overall_standing', ''), '⚪')
+                        _exp_title = (
+                            f"{_icon} {_m['centro']} — {_m['semana']}/{_m.get('year','')} · "
+                            f"Score {_s.get('overall_score')} ({_s.get('overall_standing')}) · "
+                            f"Rank #{_s.get('rank_station')}"
+                        )
+                        with st.expander(_exp_title, expanded=False):
+                            _rw  = _s.get('rank_wow')
+                            _tc  = _tier_color
+                            _ost = _s.get('overall_standing', '')
 
-                        # ── Overall ──────────────────────────────────────────
-                        _ov1, _ov2 = st.columns([3, 1])
-                        with _ov1:
-                            st.markdown(
-                                f"<div style='font-size:1.5em;font-weight:700;margin-bottom:4px'>"
-                                f"Score: {_s.get('overall_score', '—')} &nbsp;"
-                                f"{_amz_badge(_ost)}</div>",
+                            # ── Overall ──────────────────────────────────────────
+                            _ov1, _ov2 = st.columns([3, 1])
+                            with _ov1:
+                                st.markdown(
+                                    f"<div style='font-size:1.5em;font-weight:700;margin-bottom:4px'>"
+                                    f"Score: {_s.get('overall_score', '—')} &nbsp;"
+                                    f"{_amz_badge(_ost)}</div>",
+                                    unsafe_allow_html=True
+                                )
+                            with _ov2:
+                                _wow_txt = f"{_rw:+d} WoW" if _rw is not None else None
+                                st.metric("Ranking", f"#{_s.get('rank_station', '—')}", _wow_txt)
+
+                            # ── Compliance & Safety ───────────────────────────────
+                            st.markdown(_block_hdr("🛡️", "Compliance & Safety",
+                                                   _s.get('safety_tier')), unsafe_allow_html=True)
+
+                            st.markdown(_sub_hdr("Safety"), unsafe_allow_html=True)
+                            _sa1, _sa2, _sa3 = st.columns(3)
+                            _sa1.metric(f"FICO {_tc.get(_s.get('fico_tier',''),'⚪')}",
+                                        _s.get('fico'), _s.get('fico_tier'))
+                            _sa2.metric(f"Speeding {_tc.get(_s.get('speeding_tier',''),'⚪')}",
+                                        _s.get('speeding_rate'), _s.get('speeding_tier'))
+                            _ment = _s.get('mentor_adoption')
+                            _sa3.metric(f"Mentor {_tc.get(_s.get('mentor_tier',''),'⚪')}",
+                                        f"{_ment}%" if _ment is not None else "—",
+                                        _s.get('mentor_tier'))
+
+                            st.markdown(_sub_hdr("Compliance"), unsafe_allow_html=True)
+                            _co1, _co2, _co3, _co4 = st.columns(4)
+                            _vsa = _s.get('vsa_compliance')
+                            _co1.metric(f"VSA {_tc.get(_s.get('vsa_tier',''),'⚪')}",
+                                        f"{_vsa}%" if _vsa is not None else "—",
+                                        _s.get('vsa_tier'))
+                            _boc_val   = _s.get('boc') or '—'
+                            _boc_color = '#CC0000' if _boc_val == 'Yes' else '#067D50'
+                            _co2.markdown(
+                                f"<p style='font-size:.85em;margin:0;color:#6c757d'>BOC</p>"
+                                f"<span style='background:{_boc_color};color:#fff;padding:3px 10px;"
+                                f"border-radius:3px;font-size:.9em;font-weight:600'>{_boc_val}</span>",
                                 unsafe_allow_html=True
                             )
-                        with _ov2:
-                            _wow_txt = f"{_rw:+d} WoW" if _rw is not None else None
-                            st.metric("Ranking", f"#{_s.get('rank_station', '—')}", _wow_txt)
+                            _whc = _s.get('whc_pct')
+                            _co3.metric(f"WHC {_tc.get(_s.get('whc_tier',''),'⚪')}",
+                                        f"{_whc}%" if _whc is not None else "—",
+                                        _s.get('whc_tier'))
+                            _cas_val   = _s.get('cas') or '—'
+                            _cas_color = ('#067D50' if 'Compliance' in _cas_val
+                                          else '#CC0000' if 'Non' in _cas_val else '#6c757d')
+                            _co4.markdown(
+                                f"<p style='font-size:.85em;margin:0;color:#6c757d'>CAS</p>"
+                                f"<span style='background:{_cas_color};color:#fff;padding:3px 10px;"
+                                f"border-radius:3px;font-size:.9em;font-weight:600'>{_cas_val}</span>",
+                                unsafe_allow_html=True
+                            )
 
-                        # ── Compliance & Safety ───────────────────────────────
-                        st.markdown(_block_hdr("🛡️", "Compliance & Safety",
-                                               _s.get('safety_tier')), unsafe_allow_html=True)
+                            # ── Delivery Quality & SWC ───────────────────────────
+                            st.markdown(_block_hdr("📦", "Delivery Quality & SWC",
+                                                   _s.get('quality_tier')), unsafe_allow_html=True)
 
-                        st.markdown(_sub_hdr("Safety"), unsafe_allow_html=True)
-                        _sa1, _sa2, _sa3 = st.columns(3)
-                        _sa1.metric(f"FICO {_tc.get(_s.get('fico_tier',''),'⚪')}",
-                                    _s.get('fico'), _s.get('fico_tier'))
-                        _sa2.metric(f"Speeding {_tc.get(_s.get('speeding_tier',''),'⚪')}",
-                                    _s.get('speeding_rate'), _s.get('speeding_tier'))
-                        _ment = _s.get('mentor_adoption')
-                        _sa3.metric(f"Mentor {_tc.get(_s.get('mentor_tier',''),'⚪')}",
-                                    f"{_ment}%" if _ment is not None else "—",
-                                    _s.get('mentor_tier'))
+                            st.markdown(_sub_hdr("Customer Delivery Experience"), unsafe_allow_html=True)
+                            _cx1, _cx2 = st.columns(2)
+                            _cx1.metric(f"CE DPMO {_tc.get(_s.get('ce_tier',''),'⚪')}",
+                                        _s.get('ce_dpmo'), _s.get('ce_tier'))
+                            _cx2.metric(f"CDF DPMO {_tc.get(_s.get('cdf_tier',''),'⚪')}",
+                                        _s.get('cdf_dpmo'), _s.get('cdf_tier'))
 
-                        st.markdown(_sub_hdr("Compliance"), unsafe_allow_html=True)
-                        _co1, _co2, _co3, _co4 = st.columns(4)
-                        _vsa = _s.get('vsa_compliance')
-                        _co1.metric(f"VSA {_tc.get(_s.get('vsa_tier',''),'⚪')}",
-                                    f"{_vsa}%" if _vsa is not None else "—",
-                                    _s.get('vsa_tier'))
-                        _boc_val   = _s.get('boc') or '—'
-                        _boc_color = '#CC0000' if _boc_val == 'Yes' else '#067D50'
-                        _co2.markdown(
-                            f"<p style='font-size:.85em;margin:0;color:#6c757d'>BOC</p>"
-                            f"<span style='background:{_boc_color};color:#fff;padding:3px 10px;"
-                            f"border-radius:3px;font-size:.9em;font-weight:600'>{_boc_val}</span>",
-                            unsafe_allow_html=True
-                        )
-                        _whc = _s.get('whc_pct')
-                        _co3.metric(f"WHC {_tc.get(_s.get('whc_tier',''),'⚪')}",
-                                    f"{_whc}%" if _whc is not None else "—",
-                                    _s.get('whc_tier'))
-                        _cas_val   = _s.get('cas') or '—'
-                        _cas_color = ('#067D50' if 'Compliance' in _cas_val
-                                      else '#CC0000' if 'Non' in _cas_val else '#6c757d')
-                        _co4.markdown(
-                            f"<p style='font-size:.85em;margin:0;color:#6c757d'>CAS</p>"
-                            f"<span style='background:{_cas_color};color:#fff;padding:3px 10px;"
-                            f"border-radius:3px;font-size:.9em;font-weight:600'>{_cas_val}</span>",
-                            unsafe_allow_html=True
-                        )
+                            st.markdown(_sub_hdr("Standard Work Compliance"), unsafe_allow_html=True)
+                            _sw1, _sw2 = st.columns(2)
+                            _pod = _s.get('pod_pct')
+                            _sw1.metric(f"POD {_tc.get(_s.get('pod_tier',''),'⚪')}",
+                                        f"{_pod}%" if _pod is not None else "—",
+                                        _s.get('pod_tier'))
+                            _cc  = _s.get('cc_pct')
+                            _sw2.metric(f"CC {_tc.get(_s.get('cc_tier',''),'⚪')}",
+                                        f"{_cc}%" if _cc is not None else "—",
+                                        _s.get('cc_tier'))
 
-                        # ── Delivery Quality & SWC ───────────────────────────
-                        st.markdown(_block_hdr("📦", "Delivery Quality & SWC",
-                                               _s.get('quality_tier')), unsafe_allow_html=True)
+                            st.markdown(_sub_hdr("Quality"), unsafe_allow_html=True)
+                            _q1, _q2, _q3, _q4 = st.columns(4)
+                            _dcr = _s.get('dcr_pct')
+                            _q1.metric(f"DCR {_tc.get(_s.get('dcr_tier',''),'⚪')}",
+                                       f"{_dcr}%" if _dcr is not None else "—",
+                                       _s.get('dcr_tier'))
+                            _q2.metric(f"DNR DPMO {_tc.get(_s.get('dnr_tier',''),'⚪')}",
+                                       _s.get('dnr_dpmo'), _s.get('dnr_tier'))
+                            _q3.metric(f"LoR DPMO {_tc.get(_s.get('lor_tier',''),'⚪')}",
+                                       _s.get('lor_dpmo'), _s.get('lor_tier'))
+                            _q4.metric(f"DSC DPMO {_tc.get(_s.get('dsc_tier',''),'⚪')}",
+                                       _s.get('dsc_dpmo'), _s.get('dsc_tier'))
 
-                        st.markdown(_sub_hdr("Customer Delivery Experience"), unsafe_allow_html=True)
-                        _cx1, _cx2 = st.columns(2)
-                        _cx1.metric(f"CE DPMO {_tc.get(_s.get('ce_tier',''),'⚪')}",
-                                    _s.get('ce_dpmo'), _s.get('ce_tier'))
-                        _cx2.metric(f"CDF DPMO {_tc.get(_s.get('cdf_tier',''),'⚪')}",
-                                    _s.get('cdf_dpmo'), _s.get('cdf_tier'))
+                            # ── Capacity ─────────────────────────────────────────
+                            st.markdown(_block_hdr("🚛", "Capacity",
+                                                   _s.get('capacity_tier')), unsafe_allow_html=True)
+                            _cap1, _cap2 = st.columns(2)
+                            _nd_val = _s.get('capacity_next_day')
+                            _cap1.metric(f"Next Day {_tc.get(_s.get('capacity_next_day_tier',''),'⚪')}",
+                                         f"{_nd_val}%" if _nd_val is not None else "—",
+                                         _s.get('capacity_next_day_tier'))
+                            _sd_val = _s.get('capacity_same_day')
+                            if _sd_val is not None:
+                                _cap2.metric(f"Same Day {_tc.get(_s.get('capacity_same_day_tier',''),'⚪')}",
+                                             f"{_sd_val}%", _s.get('capacity_same_day_tier'))
 
-                        st.markdown(_sub_hdr("Standard Work Compliance"), unsafe_allow_html=True)
-                        _sw1, _sw2 = st.columns(2)
-                        _pod = _s.get('pod_pct')
-                        _sw1.metric(f"POD {_tc.get(_s.get('pod_tier',''),'⚪')}",
-                                    f"{_pod}%" if _pod is not None else "—",
-                                    _s.get('pod_tier'))
-                        _cc  = _s.get('cc_pct')
-                        _sw2.metric(f"CC {_tc.get(_s.get('cc_tier',''),'⚪')}",
-                                    f"{_cc}%" if _cc is not None else "—",
-                                    _s.get('cc_tier'))
+                            # ── Focus Areas ──────────────────────────────────────
+                            _fa1 = _s.get('focus_area_1') or '—'
+                            _fa2 = _s.get('focus_area_2') or '—'
+                            _fa3 = _s.get('focus_area_3') or '—'
+                            st.markdown(
+                                f"<div style='background:#fff3cd;border-left:4px solid #FF9900;"
+                                f"padding:8px 12px;border-radius:4px;margin:12px 0 6px 0'>"
+                                f"🎯 <b>Focus Areas Amazon:</b>&nbsp; "
+                                f"1. {_fa1} &nbsp;·&nbsp; 2. {_fa2} &nbsp;·&nbsp; 3. {_fa3}</div>",
+                                unsafe_allow_html=True
+                            )
 
-                        st.markdown(_sub_hdr("Quality"), unsafe_allow_html=True)
-                        _q1, _q2, _q3, _q4 = st.columns(4)
-                        _dcr = _s.get('dcr_pct')
-                        _q1.metric(f"DCR {_tc.get(_s.get('dcr_tier',''),'⚪')}",
-                                   f"{_dcr}%" if _dcr is not None else "—",
-                                   _s.get('dcr_tier'))
-                        _q2.metric(f"DNR DPMO {_tc.get(_s.get('dnr_tier',''),'⚪')}",
-                                   _s.get('dnr_dpmo'), _s.get('dnr_tier'))
-                        _q3.metric(f"LoR DPMO {_tc.get(_s.get('lor_tier',''),'⚪')}",
-                                   _s.get('lor_dpmo'), _s.get('lor_tier'))
-                        _q4.metric(f"DSC DPMO {_tc.get(_s.get('dsc_tier',''),'⚪')}",
-                                   _s.get('dsc_dpmo'), _s.get('dsc_tier'))
-
-                        # ── Capacity ─────────────────────────────────────────
-                        st.markdown(_block_hdr("🚛", "Capacity",
-                                               _s.get('capacity_tier')), unsafe_allow_html=True)
-                        _cap1, _cap2 = st.columns(2)
-                        _nd_val = _s.get('capacity_next_day')
-                        _cap1.metric(f"Next Day {_tc.get(_s.get('capacity_next_day_tier',''),'⚪')}",
-                                     f"{_nd_val}%" if _nd_val is not None else "—",
-                                     _s.get('capacity_next_day_tier'))
-                        _sd_val = _s.get('capacity_same_day')
-                        if _sd_val is not None:
-                            _cap2.metric(f"Same Day {_tc.get(_s.get('capacity_same_day_tier',''),'⚪')}",
-                                         f"{_sd_val}%", _s.get('capacity_same_day_tier'))
-
-                        # ── Focus Areas ──────────────────────────────────────
-                        _fa1 = _s.get('focus_area_1') or '—'
-                        _fa2 = _s.get('focus_area_2') or '—'
-                        _fa3 = _s.get('focus_area_3') or '—'
-                        st.markdown(
-                            f"<div style='background:#fff3cd;border-left:4px solid #FF9900;"
-                            f"padding:8px 12px;border-radius:4px;margin:12px 0 6px 0'>"
-                            f"🎯 <b>Focus Areas Amazon:</b>&nbsp; "
-                            f"1. {_fa1} &nbsp;·&nbsp; 2. {_fa2} &nbsp;·&nbsp; 3. {_fa3}</div>",
-                            unsafe_allow_html=True
-                        )
-
-                        _nd = len(_p['drivers']) if not _p['drivers'].empty else 0
-                        _nw = len(_p['wh']) if not _p['wh'].empty else 0
-                        st.caption(f"📊 {_nd} conductores · ⏰ {_nw} excepciones WHC")
-                        if _p['errors']:
-                            st.warning(f"⚠️ Campos no encontrados: {', '.join(_p['errors'])}")
+                            _nd = len(_p['drivers']) if not _p['drivers'].empty else 0
+                            _nw = len(_p['wh']) if not _p['wh'].empty else 0
+                            st.caption(f"📊 {_nd} conductores · ⏰ {_nw} excepciones WHC")
+                            if _p['errors']:
+                                st.warning(f"⚠️ Campos no encontrados: {', '.join(_p['errors'])}")
 
         st.divider()
         st.subheader("📊 Histórico DSP Scorecard por Estación")
