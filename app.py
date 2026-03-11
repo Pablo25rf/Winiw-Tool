@@ -25,6 +25,7 @@ import re
 import os
 import logging
 import html as _html
+import numpy as np
 import altair as alt
 from datetime import datetime, timedelta
 
@@ -227,7 +228,7 @@ def cached_meta(_db_config_key: str, db_config: dict, allowed_weeks: list = None
                 where = f"WHERE semana IN ({placeholders})"
                 params = allowed_weeks
             df = pd.read_sql_query(
-                f"SELECT DISTINCT centro, semana, calificacion FROM scorecards {where} ORDER BY fecha_semana DESC, semana DESC",
+                f"SELECT DISTINCT centro, semana, calificacion, MAX(fecha_semana) AS fecha_semana FROM scorecards {where} GROUP BY centro, semana, calificacion ORDER BY fecha_semana DESC, semana DESC",
                 conn, params=params
             )
         return df
@@ -1420,10 +1421,9 @@ if tab_proc:
                                 current_center = center_manual if center_manual else center
                                 _year_to_save = data.get('year')
                                 if _year_to_save is None:
-                                    # Por defecto 2025 (quirúrgico)
-                                    _year_to_save = 2025
-                                    
-                                scorecard.delete_scorecard_batch(current_week, current_center, db_config=db_config)
+                                    _year_to_save = datetime.now().year
+
+                                scorecard.delete_scorecard_batch(current_week, current_center, db_config=db_config, year=_year_to_save)
 
                                 df = scorecard.process_single_batch(
                                     data['concessions'], data['quality'], data['false_scan'],
@@ -1437,6 +1437,7 @@ if tab_proc:
                                         db_config=db_config,
                                         uploaded_by=user_data_session['name'],
                                         year=_year_to_save,
+                                        clean_first=False,
                                     )
                                     # Invalidar solo el caché relacionado con este lote
                                     # (no borramos todo para no perjudicar a usuarios concurrentes)
@@ -1594,7 +1595,7 @@ if tab_proc:
                                 )
 
                                 if df_bulk is not None:
-                                    _year_to_save_b = year_f if year_f else 2025
+                                    _year_to_save_b = year_f if year_f else datetime.now().year
                                     ok_b = scorecard.save_to_database(
                                         df_bulk, week_f, center_f,
                                         db_config=db_config,
@@ -1740,7 +1741,7 @@ if tab_dsp:
                         _s = _p['station']
                         _c, _w, _yr = _m['centro'], _m['semana'], _m.get('year')
                         if _yr is None:
-                            _yr = 2025
+                            _yr = datetime.now().year
                         try:
                             _ok_st, _err_st = scorecard.save_station_scorecard(
                                 _s, _w, _c, db_config, user_data_session['name'],

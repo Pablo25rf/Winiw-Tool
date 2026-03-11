@@ -2028,23 +2028,23 @@ def reset_production_database(db_config: Optional[Dict] = None):
 @functools.lru_cache(maxsize=128)
 def week_to_date(week_str: str, year: int = None) -> str:
     """Convierte un string de semana 'W05' a la fecha del lunes de esa semana"""
+    _fallback_year = year or datetime.now().year
+    _fallback_date = f"{_fallback_year}-01-06"
     try:
         if not week_str or week_str == "N/A":
-            return "2025-01-06"
-        
+            return _fallback_date
+
         # Extraer número de semana
         match = re.search(r'(\d+)', week_str)
         if not match:
-            return "2025-01-06"
+            return _fallback_date
             
         week_num = int(match.group(1))
 
         if year is None:
-            year = 2025
+            year = datetime.now().year
             if week_num > 45:
                 year -= 1
-            elif week_num < 8:
-                pass
 
         # Cálculo ISO: 4 de enero es siempre semana 1
         d = datetime(year, 1, 4)
@@ -2052,7 +2052,7 @@ def week_to_date(week_str: str, year: int = None) -> str:
         start_date = d - timedelta(days=d.weekday()) + timedelta(weeks=week_num-1)
         return start_date.strftime("%Y-%m-%d")
     except (ValueError, TypeError, AttributeError):
-        return "2025-01-06"
+        return _fallback_date
 
 def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Optional[Dict] = None,
                      uploaded_by: str = "System", clean_first: bool = True,
@@ -2065,9 +2065,6 @@ def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Option
                 week = f"W{int(week[1:]):02d}"
             except ValueError:
                 pass
-
-        if clean_first:
-            delete_scorecard_batch(week, center, db_config)
 
         is_postgres = db_config and db_config.get('type') == 'postgresql'
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2087,6 +2084,9 @@ def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Option
             except (ValueError, TypeError): return default
 
         year_int = int(date_week[:4]) if date_week else None
+
+        if clean_first:
+            delete_scorecard_batch(week, center, db_config, year=year_int)
 
         all_vals = [
             (
@@ -2628,8 +2628,8 @@ def parse_dsp_scorecard_pdf(pdf_bytes: bytes) -> dict:
                     break
             
             if not year:
-                year = 2025
-            
+                year = datetime.now().year
+
             if not centro:
                 result['errors'].append("No se detectó el centro en el PDF")
                 return result
@@ -2704,7 +2704,7 @@ def save_station_scorecard(station_data: dict, week: str, center: str,
             'uploaded_by',
         ]
 
-        anio_ss = int(fecha[:4]) if fecha else (year or 2025)
+        anio_ss = int(fecha[:4]) if fecha else (year or datetime.now().year)
 
         vals = [
             week, fecha, anio_ss, center,
@@ -2786,7 +2786,7 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
             phs = ", ".join([ph] * len(all_ids))
             
             if year is None:
-                year = 2025
+                year = datetime.now().year
 
             cursor.execute(
                 f"SELECT driver_id FROM scorecards "
@@ -2862,7 +2862,7 @@ def save_wh_exceptions(wh_df: pd.DataFrame, week: str, center: str,
             ph     = '%s' if is_pg else '?'
             fecha  = week_to_date(week, year=year)
 
-            anio_wh = int(fecha[:4]) if fecha else (year or 2025)
+            anio_wh = int(fecha[:4]) if fecha else (year or datetime.now().year)
 
             # ── Lookup driver_name desde scorecards (misma semana, centro y año) ──
             driver_ids = wh_df['driver_id'].astype(str).tolist()
