@@ -2093,7 +2093,7 @@ def week_to_date(week_str: str, year: int = None) -> str:
         week_num = int(match.group(1))
 
         if year is None:
-            year = 2025
+            year = datetime.now().year
             if week_num > 45:
                 year -= 1
             elif week_num < 8:
@@ -2745,7 +2745,7 @@ def parse_dsp_scorecard_pdf(pdf_bytes: bytes) -> dict:
                     break
             
             if not year:
-                year = 2025
+                year = datetime.now().year
             
             if not centro:
                 result['errors'].append("No se detectó el centro en el PDF")
@@ -2821,7 +2821,7 @@ def save_station_scorecard(station_data: dict, week: str, center: str,
             'uploaded_by',
         ]
 
-        anio_ss = int(fecha[:4]) if fecha else (year or 2025)
+        anio_ss = int(fecha[:4]) if fecha else (year or datetime.now().year)
 
         vals = [
             week, fecha, anio_ss, center,
@@ -2947,7 +2947,7 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
             phs = ", ".join([ph] * len(all_ids))
             
             if year is None:
-                year = 2025
+                year = datetime.now().year
 
             cursor.execute(
                 f"SELECT driver_id FROM scorecards "
@@ -3010,7 +3010,7 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
             # El CSV de Concessions rellenará driver_name, dnr y rts después.
             if not_found:
                 fecha_ins = week_to_date(week, year=year)
-                anio_ins  = year if year else (int(fecha_ins[:4]) if fecha_ins else 2025)
+                anio_ins  = year if year else (int(fecha_ins[:4]) if fecha_ins else datetime.now().year)
                 ts_ins    = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
                 ins_cols = [
@@ -3106,7 +3106,7 @@ def save_wh_exceptions(wh_df: pd.DataFrame, week: str, center: str,
             ph     = '%s' if is_pg else '?'
             fecha  = week_to_date(week, year=year)
 
-            anio_wh = int(fecha[:4]) if fecha else (year or 2025)
+            anio_wh = int(fecha[:4]) if fecha else (year or datetime.now().year)
 
             # ── Lookup driver_name desde scorecards (misma semana, centro y año) ──
             driver_ids = wh_df['driver_id'].astype(str).tolist()

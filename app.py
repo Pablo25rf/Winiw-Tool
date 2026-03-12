@@ -31,13 +31,13 @@ from datetime import datetime, timedelta
 # Logger de auditoría de la app (separado del motor)
 _log = logging.getLogger("winiw_app")
 if not _log.handlers:
+    os.makedirs("logs", exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler("logs/winiw_app.log", mode='a', encoding='utf-8')
-            if os.path.isdir("logs") else logging.StreamHandler()
+            logging.FileHandler("logs/winiw_app.log", mode='a', encoding='utf-8'),
         ]
     )
 
@@ -109,12 +109,16 @@ def get_db_config():
 
 def check_session_timeout():
     """Cierra la sesión si lleva más de SESSION_TIMEOUT_MINUTES inactiva."""
+    now = datetime.now()
     last = st.session_state.get("last_activity")
-    if last and (datetime.now() - last) > timedelta(minutes=SESSION_TIMEOUT_MINUTES):
+    if last is None:
+        st.session_state["last_activity"] = now
+        return
+    if (now - last) > timedelta(minutes=SESSION_TIMEOUT_MINUTES):
         st.session_state.clear()
         st.warning("⏰ Sesión expirada por inactividad. Inicia sesión de nuevo.")
         st.stop()
-    st.session_state["last_activity"] = datetime.now()
+    st.session_state["last_activity"] = now
 
 
 def clean_html(html: str) -> str:
@@ -606,6 +610,8 @@ def _get_mini_trend(driver_id: str, df_trend_batch: "pd.DataFrame") -> str:
 
 def _is_still_locked(val, now_dt) -> bool:
     """Comprueba si una cuenta sigue bloqueada."""
+    if val is None:
+        return False
     try:
         return datetime.strptime(str(val)[:19], "%Y-%m-%d %H:%M:%S") > now_dt
     except Exception:
@@ -966,7 +972,7 @@ with st.sidebar:
 
     if is_jt and ALLOWED_WEEKS_JT:
         st.divider()
-        semana_actual = ALLOWED_WEEKS_JT[0] if ALLOWED_WEEKS_JT else "—"
+        semana_actual = ALLOWED_WEEKS_JT[0]
         semana_prev   = ALLOWED_WEEKS_JT[1] if len(ALLOWED_WEEKS_JT) > 1 else "—"
         st.markdown(f"""
         <div style='font-size:0.85em;color:#6c757d'>
@@ -980,7 +986,15 @@ with st.sidebar:
         st.divider()
         with st.expander("🔧 Override Manual"):
             center_manual = st.text_input("Centro", "", help="Sobrescribir centro detectado")
-            week_manual   = st.text_input("Semana", "", placeholder="ej: W07")
+            _wm_raw       = st.text_input("Semana", "", placeholder="ej: W07")
+            # Normalizar W5 → W05, W9 → W09
+            if _wm_raw and _wm_raw.upper().startswith("W"):
+                try:
+                    week_manual = f"W{int(_wm_raw[1:]):02d}"
+                except ValueError:
+                    week_manual = _wm_raw
+            else:
+                week_manual = _wm_raw
     else:
         center_manual = ""
         week_manual   = ""
@@ -1420,8 +1434,7 @@ if tab_proc:
                                 current_center = center_manual if center_manual else center
                                 _year_to_save = data.get('year')
                                 if _year_to_save is None:
-                                    # Por defecto 2025 (quirúrgico)
-                                    _year_to_save = 2025
+                                    _year_to_save = datetime.now().year
                                     
                                 df = scorecard.process_single_batch(
                                     data['concessions'], data['quality'], data['false_scan'],
@@ -3483,7 +3496,7 @@ if tab_admin:
                         valor = None if centro_to_assign == "(Sin restricción)" else centro_to_assign
                         ok_ca = scorecard.set_user_centro(jt_to_assign, valor, db_config)
                         if ok_ca:
-                            cached_user_centro.clear()
+                            _clear_all_caches()
                             info = f"→ {valor}" if valor else "→ sin restricción"
                             _audit(f"Asignó centro a '{jt_to_assign}' {info}")
                             st.success(f"✅ '{jt_to_assign}' {info}")
