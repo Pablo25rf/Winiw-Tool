@@ -1443,7 +1443,7 @@ if tab_proc:
                                     targets=new_t
                                 )
                                 if df is not None:
-                                    ok = scorecard.save_to_database(
+                                    ok, _save_err = scorecard.save_to_database(
                                         df, current_week, current_center,
                                         db_config=db_config,
                                         uploaded_by=user_data_session['name'],
@@ -1476,7 +1476,7 @@ if tab_proc:
                                         except Exception as _ae:
                                             _log.warning(f"Alertas: {_ae}")
                                     else:
-                                        st.warning("⚠️ Procesado pero error al guardar en BD.")
+                                        st.warning(f"⚠️ Procesado pero error al guardar en BD: `{_save_err}`")
 
                                     output = io.BytesIO()
                                     scorecard.create_professional_excel(
@@ -1605,16 +1605,17 @@ if tab_proc:
                                 )
 
                                 if df_bulk is not None:
-                                    _year_to_save_b = year_f if year_f else 2025
-                                    ok_b = scorecard.save_to_database(
+                                    _year_to_save_b = year_f if year_f else datetime.now().year
+                                    ok_b, _err_b = scorecard.save_to_database(
                                         df_bulk, week_f, center_f,
                                         db_config=db_config,
                                         uploaded_by=f"{user_data_session['name']} (bulk)",
                                         year=_year_to_save_b,
                                     )
                                     status = "✅" if ok_b else "⚠️"
+                                    _sfx = f" — {_err_b}" if not ok_b and _err_b else f" — {len(df_bulk)} conductores"
                                     results_bulk.append(
-                                        f"{status} {center_f} {week_f} — {len(df_bulk)} conductores"
+                                        f"{status} {center_f} {week_f}{_sfx}"
                                     )
                                     _audit(f"Bulk import: {center_f} {week_f} — {len(df_bulk)} conductores")
                                 else:

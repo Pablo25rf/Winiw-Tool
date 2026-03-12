@@ -2276,10 +2276,10 @@ def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Option
             conn.commit()
 
         logger.info(f"✅ {len(df)} registros sincronizados con DB ({'PostgreSQL' if is_postgres else 'SQLite'})")
-        return True
+        return True, ''
     except Exception as e:
         logger.error(f"Error guardando en DB: {str(e)}")
-        return False
+        return False, str(e)
 
 def refresh_center_views(db_config=None) -> int:
     """
