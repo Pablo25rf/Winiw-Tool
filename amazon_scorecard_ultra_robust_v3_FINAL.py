@@ -55,6 +55,12 @@ def _get_pg_pool(db_config: dict):
                 password=db_config.get('password', ''),
                 port=db_config.get('port', 5432),
                 connect_timeout=10,
+                sslmode='require',          # Supabase exige SSL
+                keepalives=1,               # TCP keepalives para evitar cortes por inactividad
+                keepalives_idle=30,         # Primer keepalive a los 30s sin actividad
+                keepalives_interval=10,     # Reintento cada 10s
+                keepalives_count=5,         # Máx 5 reintentos antes de cerrar
+                options="-c statement_timeout=30000",  # Timeout de queries a 30s
             )
     return _PG_POOL
 HAS_BCRYPT = False
@@ -1389,19 +1395,36 @@ def get_db_connection(db_config: Optional[Dict] = None):
         if not HAS_POSTGRES:
             raise ImportError("Librería 'psycopg2' no encontrada. Instálala con: pip install psycopg2-binary")
         # Usar pool — reutiliza conexiones en vez de abrir una nueva cada vez
+        _pg_kwargs = dict(
+            host=db_config.get('host', 'localhost'),
+            database=db_config.get('database', 'postgres'),
+            user=db_config.get('user', 'postgres'),
+            password=db_config.get('password', ''),
+            port=db_config.get('port', 5432),
+            connect_timeout=10,
+            sslmode='require',
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=5,
+            options="-c statement_timeout=30000",
+        )
         try:
             _pool = _get_pg_pool(db_config)
-            return _pool.getconn()
+            conn = _pool.getconn()
+            # Validar que la conexión sigue viva; si está rota, reconectar
+            try:
+                conn.cursor().execute("SELECT 1")
+            except Exception:
+                try:
+                    _pool.putconn(conn, close=True)
+                except Exception:
+                    pass
+                conn = psycopg2.connect(**_pg_kwargs)
+            return conn
         except Exception:
             # Fallback a conexión directa si el pool falla
-            return psycopg2.connect(
-                host=db_config.get('host', 'localhost'),
-                database=db_config.get('database', 'postgres'),
-                user=db_config.get('user', 'postgres'),
-                password=db_config.get('password', ''),
-                port=db_config.get('port', 5432),
-                connect_timeout=10,
-            )
+            return psycopg2.connect(**_pg_kwargs)
     else:
         if db_config and db_config.get('path'):
             db_path = db_config['path']
@@ -2854,21 +2877,54 @@ def save_station_scorecard(station_data: dict, week: str, center: str,
         col_list     = ', '.join(fields)
         placeholders = ', '.join([ph] * len(fields))
 
-        if is_pg:
-            update_set = ', '.join(
-                f"{f} = EXCLUDED.{f}" for f in fields if f not in ('semana', 'centro', 'anio')
-            )
-            query = f"""
-                INSERT INTO station_scorecards ({col_list}) VALUES ({placeholders})
-                ON CONFLICT (semana, centro, anio) DO UPDATE SET {update_set}
-            """
-        else:
-            query = f"INSERT OR REPLACE INTO station_scorecards ({col_list}) VALUES ({placeholders})"
-
         with db_connection(db_config) as conn:
             cursor = conn.cursor()
+
+            if is_pg:
+                # Asegurar que la columna anio existe (puede faltar en BDs antiguas
+                # si el usuario de la app no tiene permisos DDL — en ese caso hay
+                # que ejecutar el ALTER TABLE manualmente en Supabase SQL Editor)
+                try:
+                    cursor.execute(
+                        "SELECT 1 FROM information_schema.columns "
+                        "WHERE table_name='station_scorecards' AND column_name='anio'"
+                    )
+                    anio_exists = cursor.fetchone() is not None
+                except Exception:
+                    anio_exists = False
+
+                if anio_exists:
+                    update_set = ', '.join(
+                        f"{f} = EXCLUDED.{f}" for f in fields if f not in ('semana', 'centro', 'anio')
+                    )
+                    query = f"""
+                        INSERT INTO station_scorecards ({col_list}) VALUES ({placeholders})
+                        ON CONFLICT (semana, centro, anio) DO UPDATE SET {update_set}
+                    """
+                else:
+                    # Fallback: insertar sin anio usando el constraint antiguo
+                    fields_no_anio = [f for f in fields if f != 'anio']
+                    vals_no_anio   = [v for f, v in zip(fields, vals) if f != 'anio']
+                    col_list_fb    = ', '.join(fields_no_anio)
+                    ph_fb          = ', '.join([ph] * len(fields_no_anio))
+                    update_set_fb  = ', '.join(
+                        f"{f} = EXCLUDED.{f}" for f in fields_no_anio if f not in ('semana', 'centro')
+                    )
+                    query = f"""
+                        INSERT INTO station_scorecards ({col_list_fb}) VALUES ({ph_fb})
+                        ON CONFLICT (semana, centro) DO UPDATE SET {update_set_fb}
+                    """
+                    vals = vals_no_anio
+                    logger.warning(
+                        "save_station_scorecard: columna 'anio' no existe en station_scorecards. "
+                        "Ejecuta el SQL de migración en Supabase SQL Editor para añadirla."
+                    )
+            else:
+                query = f"INSERT OR REPLACE INTO station_scorecards ({col_list}) VALUES ({placeholders})"
+
             cursor.execute(query, vals)
             conn.commit()
+
         logger.info(f"✓ station_scorecard guardado: {center} {week} | Score: {station_data.get('overall_score')} {station_data.get('overall_standing')}")
         return True, ''
 
