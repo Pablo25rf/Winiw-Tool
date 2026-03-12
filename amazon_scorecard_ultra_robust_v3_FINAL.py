@@ -1827,8 +1827,9 @@ def init_database(db_config: Optional[Dict] = None):
         # INTEGER con el año ISO extraído de fecha_semana.
         # Permite filtrar por año en Power BI sin parsear fechas.
         for _tbl, _type in [
-            ("scorecards",    "INTEGER" if is_postgres else "INTEGER"),
-            ("wh_exceptions", "INTEGER" if is_postgres else "INTEGER"),
+            ("scorecards",         "INTEGER"),
+            ("wh_exceptions",      "INTEGER"),
+            ("station_scorecards", "INTEGER"),
         ]:
             try:
                 if is_postgres:
@@ -1841,7 +1842,7 @@ def init_database(db_config: Optional[Dict] = None):
                 logger.warning(f"Migración v3.9b anio en {_tbl}: {_e}")
 
         # Rellenar anio para filas existentes que tengan fecha_semana
-        for _tbl in ("scorecards", "wh_exceptions"):
+        for _tbl in ("scorecards", "wh_exceptions", "station_scorecards"):
             try:
                 if is_postgres:
                     cursor.execute(
