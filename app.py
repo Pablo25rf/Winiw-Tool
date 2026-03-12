@@ -768,9 +768,11 @@ def render_calificacion(cal: str) -> str:
 
 
 def render_detalles(detalles_str: str) -> str:
-    if not detalles_str or str(detalles_str).strip() in ('Óptimo', 'nan', ''):
+    s = str(detalles_str).strip()
+    if not s or s in ('Óptimo', 'nan', ''):
         return badge('✅ Óptimo', '#198754')
-    issues = [i.strip() for i in str(detalles_str).split(',') if i.strip()]
+    parts = re.split(r'[,|]', s)
+    issues = [i.strip() for i in parts if i.strip()]
     html_parts = []
     for issue in issues:
         color = '#6c757d'
@@ -1726,7 +1728,7 @@ if tab_proc:
                                 else:
                                     errors_bulk.append(f"❌ {folder.name}: error en procesamiento")
 
-                                    prog.progress((i+1)/total_folders)
+                                prog.progress((i+1)/total_folders)
 
                         prog.progress(1.0)
 
@@ -1798,7 +1800,7 @@ if tab_dsp:
                 return (f'<span style="background:{c};color:#fff;padding:2px 8px;'
                         f'border-radius:3px;font-size:.78em;font-weight:600">{tier or "—"}</span>')
 
-            def _block_hdr(icon: str, title: str, tier: str | None = None) -> str:
+            def _block_hdr(icon: str, title: str, tier=None) -> str:
                 c = _AMAZON_COLORS.get(tier, '#495057')
                 badge = f' {_amz_badge(tier)}' if tier else ''
                 return (f'<div style="background:#f0f2f6;border-left:4px solid {c};'
@@ -2464,8 +2466,11 @@ with tab_excel:
                                 _metric_row("Entregas", row.get('entregados'), None, is_int=True, is_pct=False) +
                                 _metric_row("DNR", row.get('dnr'), _t.get('target_dnr', 0.5),
                                             higher_is_better=False, is_pct=False, is_int=True) +
-                                _metric_row("False Scans", row.get('fs_count'), 5,
-                                            higher_is_better=False, is_pct=False, is_int=True) +
+                                _metric_row(
+                                    "DSC DPMO" if has_pdf else "False Scans",
+                                    row.get('fs_count'),
+                                    1490 if has_pdf else 5,
+                                    higher_is_better=False, is_pct=False, is_int=True) +
                                 _metric_row("DCR", row.get('dcr'), _t.get('target_dcr', 0.995)) +
                                 _metric_row("POD", row.get('pod'), _t.get('target_pod', 0.99)) +
                                 _metric_row("CC",  row.get('cc'),  _t.get('target_cc', 0.99)) +
@@ -3724,14 +3729,20 @@ if tab_admin:
             with st.form("clean_batch_form"):
                 clean_center = st.text_input("Centro")
                 clean_week   = st.text_input("Semana", placeholder="ej: W05")
+                clean_year   = st.number_input("Año", value=datetime.now().year,
+                                               min_value=2020, max_value=2035, step=1,
+                                               help="Dejar en blanco borra TODOS los años")
+                clean_all_years = st.checkbox("Borrar todos los años", value=False)
                 if st.form_submit_button("Limpiar"):
                     if clean_center and clean_week:
-                        scorecard.delete_scorecard_batch(clean_week, clean_center, db_config=db_config)
+                        yr = None if clean_all_years else int(clean_year)
+                        scorecard.delete_scorecard_batch(clean_week, clean_center, db_config=db_config, year=yr)
                         _clear_all_caches()
-                        _audit(f"Eliminó lote {clean_center} {clean_week}")
-                        st.success(f"✅ {clean_center} — {clean_week} eliminado")
+                        yr_label = "todos los años" if yr is None else str(yr)
+                        _audit(f"Eliminó lote {clean_center} {clean_week} ({yr_label})")
+                        st.success(f"✅ {clean_center} — {clean_week} ({yr_label}) eliminado")
                     else:
-                        st.error("Completa ambos campos")
+                        st.error("Completa centro y semana")
 
         with col3:
             st.markdown("#### ⚙️ Mantenimiento")

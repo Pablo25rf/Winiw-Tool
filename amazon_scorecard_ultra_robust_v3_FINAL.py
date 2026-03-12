@@ -1558,7 +1558,8 @@ def process_from_pdf_and_concessions(
                 df_merged['Entregados']
             )
 
-        df_merged['FDPS'] = 1.0
+        df_merged['FDPS']       = 1.0
+        df_merged['pdf_loaded'] = 1
 
         df_merged['DNR'] = pd.to_numeric(df_merged['DNR'], errors='coerce').fillna(0.0).clip(upper=Config.MAX_DNR)
 
@@ -2286,11 +2287,19 @@ def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Option
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         date_week = week_to_date(week, year=year)
 
-        cols = [
+        base_cols = [
             "semana", "fecha_semana", "anio", "centro", "driver_id", "driver_name", "calificacion", "score",
             "entregados", "dnr", "fs_count", "dnr_risk_events", "dcr", "pod", "cc",
             "fdps", "rts", "cdf", "detalles", "uploaded_by", "timestamp"
         ]
+
+        PDF_OPTIONAL_COLS = [
+            "entregados_oficial", "dcr_oficial", "pod_oficial", "cc_oficial",
+            "dsc_dpmo", "lor_dpmo", "ce_dpmo", "cdf_dpmo_oficial", "pdf_loaded",
+        ]
+        has_pdf_cols = any(c in df.columns for c in PDF_OPTIONAL_COLS)
+        pdf_cols_present = [c for c in PDF_OPTIONAL_COLS if c in df.columns] if has_pdf_cols else []
+        cols = base_cols + pdf_cols_present
 
         placeholder = "%s" if is_postgres else "?"
         placeholders = ", ".join([placeholder] * len(cols))
@@ -2299,13 +2308,26 @@ def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Option
             try: return float(v) if v is not None and str(v) not in ('nan','None','') else default
             except (ValueError, TypeError): return default
 
+        def _safe_int(v, default=None):
+            try: return int(v) if v is not None and str(v) not in ('nan','None','') else default
+            except (ValueError, TypeError): return default
+
         year_int = int(date_week[:4]) if date_week else None
 
         if clean_first:
             delete_scorecard_batch(week, center, db_config, year=year_int)
 
+        def _row_pdf_vals(row):
+            vals = []
+            for c in pdf_cols_present:
+                if c == 'pdf_loaded':
+                    vals.append(_safe_int(row.get(c), 0))
+                else:
+                    vals.append(_safe_float(row.get(c)))
+            return vals
+
         all_vals = [
-            (
+            tuple([
                 week, date_week, year_int, center,
                 str(row['ID']), str(row['Nombre']),
                 str(row['CALIFICACION']), _safe_float(row['SCORE']),
@@ -2315,9 +2337,16 @@ def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Option
                 _safe_float(row['CC']), _safe_float(row['FDPS']),
                 _safe_float(row['RTS']), _safe_float(row['CDF']),
                 str(row['DETALLES']), uploaded_by, ts
-            )
+            ] + _row_pdf_vals(row))
             for _, row in df.iterrows()
         ]
+
+        pdf_update_set = ""
+        if pdf_cols_present:
+            pdf_update_set = "\n" + "\n".join(
+                f"                        {c:<20} = EXCLUDED.{c},"
+                for c in pdf_cols_present
+            )
 
         with db_connection(db_config) as conn:
             cursor = conn.cursor()
@@ -2343,7 +2372,7 @@ def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Option
                         cdf             = EXCLUDED.cdf,
                         detalles        = EXCLUDED.detalles,
                         uploaded_by     = EXCLUDED.uploaded_by,
-                        timestamp       = EXCLUDED.timestamp
+                        timestamp       = EXCLUDED.timestamp{pdf_update_set}
                 """
                 cursor.executemany(query, all_vals)
             else:
