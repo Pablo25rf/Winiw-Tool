@@ -413,7 +413,7 @@ def _cached_sidebar_stats(_db_config_key: str, db_config: dict):
 
 
 @st.cache_data(ttl=120, show_spinner=False)
-def cached_user_centro(_db_config_key: str, db_config: dict, username: str) -> str | None:
+def cached_user_centro(_db_config_key: str, db_config: dict, username: str):
     """Centro asignado a un JT. None = sin restricción."""
     return scorecard.get_user_centro(username, db_config)
 
@@ -691,13 +691,13 @@ def _get_user_credentials(username: str, db_config: dict) -> tuple:
         return None, None
 
 
-def get_user_password_hash(username: str, db_config: dict) -> str | None:
+def get_user_password_hash(username: str, db_config: dict):
     """Obtiene el hash de contraseña de un usuario. Devuelve None si no existe."""
     pw_hash, _ = _get_user_credentials(username, db_config)
     return pw_hash
 
 
-def get_user_data(username: str, db_config: dict) -> dict | None:
+def get_user_data(username: str, db_config: dict):
     """Obtiene username, role y must_change_password de un usuario activo."""
     _, user_dict = _get_user_credentials(username, db_config)
     return user_dict
@@ -708,7 +708,7 @@ def update_user_password(username: str, new_hash: str, db_config: dict) -> bool:
     return scorecard.update_user_password(username, new_hash, db_config)
 
 
-def get_user_role(username: str, db_config: dict) -> str | None:
+def get_user_role(username: str, db_config: dict):
     """Devuelve el rol de un usuario o None si no existe."""
     try:
         with scorecard.db_connection(db_config) as conn:
@@ -3134,7 +3134,7 @@ with tab_profile:
     |---|---|
     | **Usuario** | {user_data_session['name']} |
     | **Rol** | {role_label} |
-    | **Sesión inicia** | {st.session_state.get('last_activity', '—')} |
+    | **Sesión inicia** | {st.session_state.get('login_time', '—')} |
     | **Timeout** | {SESSION_TIMEOUT_MINUTES} min de inactividad |
     """)
 

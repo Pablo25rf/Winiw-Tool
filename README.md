@@ -8,8 +8,8 @@ Sistema de gestión de calidad para Amazon DSP — procesa CSVs y PDFs semanales
 
 ## ✨ Funcionalidades
 
-- **Procesamiento automático** de 7 fuentes CSV/Excel + PDF DSP Scorecard
-- **Score ponderado** por conductor con 8 métricas (DNR, DCR, POD, CC, RTS, CDF, FDPS, FS)
+- **Dos modos de procesamiento**: PDF + Concessions (recomendado, solo 2 archivos) o múltiples CSV/Excel (clásico, hasta 7 fuentes)
+- **Score ponderado** por conductor con 8 métricas (DNR, DCR, POD, CC, RTS, CDF, FDPS, DSC DPMO)
 - **Calificaciones**: 💎 FANTASTIC · 🥇 GREAT · ⚠️ FAIR · 🛑 POOR
 - **Dashboard ejecutivo** con ranking de centros y tendencia semanal
 - **Histórico completo** con filtros avanzados y exportación Power BI

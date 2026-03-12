@@ -14,7 +14,7 @@ from datetime import datetime
 import pandas as pd
 import numpy as np
 
-_THIS_YEAR = 2025
+_THIS_YEAR = datetime.now().year
 
 os.environ.setdefault("WINIW_ADMIN_USER", "test_admin")
 os.environ.setdefault("WINIW_ADMIN_PASS", "Test_Pass_Seguro_2024!")

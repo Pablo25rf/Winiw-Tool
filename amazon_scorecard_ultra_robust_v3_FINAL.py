@@ -5,7 +5,7 @@ Sistema de procesamiento y análisis de métricas de calidad para conductores Am
 Soporta PostgreSQL y SQLite con auto-migraciones y validaciones robustas.
 
 Versión: 3.9
-Fecha: Marzo 2025
+Fecha: Marzo 2026
 """
 
 import pandas as pd
