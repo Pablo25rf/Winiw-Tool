@@ -1537,56 +1537,52 @@ if tab_proc:
                                 st.error("❌ El archivo no es un ZIP válido.")
                                 st.stop()
 
-                            # Recorrer carpetas (nivel 1)
+                            # Recopilar TODOS los archivos válidos del ZIP (sin importar estructura de carpetas)
                             root = pathlib.Path(tmpdir)
-                            folders = sorted([f for f in root.rglob('*') if f.is_dir()])
-                            if not folders:
-                                folders = [root]  # Si no hay subcarpetas, usar raíz
+                            all_files = [
+                                f for f in root.rglob('*')
+                                if f.is_file() and f.suffix.lower() in ['.csv', '.xlsx', '.html', '.xls']
+                            ]
 
+                            # Agrupar por (centro, semana) detectados en el nombre del archivo o su carpeta padre
+                            from collections import defaultdict
+                            groups: dict = defaultdict(lambda: {k: [] for k in ['concessions','dsc_concessions','quality','false_scan','dwc','fdps','daily']})
+                            group_years: dict = {}
+
+                            for ff in all_files:
+                                fn = ff.name.lower()
+                                # Intentar detectar centro+semana desde el archivo, luego desde la carpeta padre
+                                ww, cc, yy = scorecard.extract_info_from_path(ff.name)
+                                if ww == 'N/A':
+                                    ww, cc, yy = scorecard.extract_info_from_path(ff.parent.name)
+                                key = (cc, ww)
+                                if yy and key not in group_years:
+                                    group_years[key] = yy
+
+                                if re.match(scorecard.Config.PATTERN_DSC_CONCESSIONS, fn, re.IGNORECASE):
+                                    groups[key]['dsc_concessions'].append(str(ff))
+                                elif re.match(scorecard.Config.PATTERN_CONCESSIONS, fn, re.IGNORECASE):
+                                    groups[key]['concessions'].append(str(ff))
+                                elif re.match(scorecard.Config.PATTERN_QUALITY, fn, re.IGNORECASE):
+                                    groups[key]['quality'].append(str(ff))
+                                elif re.match(scorecard.Config.PATTERN_FALSE_SCAN, fn, re.IGNORECASE):
+                                    groups[key]['false_scan'].append(str(ff))
+                                elif re.match(scorecard.Config.PATTERN_DWC, fn, re.IGNORECASE):
+                                    groups[key]['dwc'].append(str(ff))
+                                elif re.match(scorecard.Config.PATTERN_FDPS, fn, re.IGNORECASE):
+                                    groups[key]['fdps'].append(str(ff))
+                                elif re.match(scorecard.Config.PATTERN_DAILY, fn, re.IGNORECASE):
+                                    groups[key]['daily'].append(str(ff))
+
+                            sorted_groups = sorted(groups.items(), key=lambda x: (x[0][0], x[0][1]))
                             prog = st.progress(0)
-                            total_folders = max(len(folders), 1)
+                            total_folders = max(len(sorted_groups), 1)
 
-                            for i, folder in enumerate(folders):
-                                files_in_folder = list(folder.iterdir())
-                                if not files_in_folder:
-                                    continue
-
-                                # Detectar semana/centro/año desde la carpeta o los archivos
-                                folder_name = folder.name
-                                week_f, center_f, year_f = scorecard.extract_info_from_path(folder_name)
-                                if week_f == 'N/A':
-                                    # Intentar desde algún archivo dentro
-                                    for ff in files_in_folder:
-                                        ww, cc, yy = scorecard.extract_info_from_path(ff.name)
-                                        if ww != 'N/A':
-                                            week_f, center_f = ww, cc
-                                            if yy and not year_f:
-                                                year_f = yy
-                                            break
-
-                                # Clasificar archivos
-                                batch_files: dict = {k: [] for k in ['concessions','dsc_concessions','quality','false_scan','dwc','fdps','daily']}
-                                for ff in files_in_folder:
-                                    fn = ff.name.lower()
-                                    if ff.suffix.lower() not in ['.csv','.xlsx','.html','.xls']:
-                                        continue
-                                    if re.match(scorecard.Config.PATTERN_DSC_CONCESSIONS, fn, re.IGNORECASE):
-                                        batch_files['dsc_concessions'].append(str(ff))
-                                    elif re.match(scorecard.Config.PATTERN_CONCESSIONS, fn, re.IGNORECASE):
-                                        batch_files['concessions'].append(str(ff))
-                                    elif re.match(scorecard.Config.PATTERN_QUALITY, fn, re.IGNORECASE):
-                                        batch_files['quality'].append(str(ff))
-                                    elif re.match(scorecard.Config.PATTERN_FALSE_SCAN, fn, re.IGNORECASE):
-                                        batch_files['false_scan'].append(str(ff))
-                                    elif re.match(scorecard.Config.PATTERN_DWC, fn, re.IGNORECASE):
-                                        batch_files['dwc'].append(str(ff))
-                                    elif re.match(scorecard.Config.PATTERN_FDPS, fn, re.IGNORECASE):
-                                        batch_files['fdps'].append(str(ff))
-                                    elif re.match(scorecard.Config.PATTERN_DAILY, fn, re.IGNORECASE):
-                                        batch_files['daily'].append(str(ff))
+                            for i, ((center_f, week_f), batch_files) in enumerate(sorted_groups):
+                                year_f = group_years.get((center_f, week_f))
 
                                 if not batch_files['concessions']:
-                                    errors_bulk.append(f"⬜ {folder.name}: sin archivo Concessions")
+                                    errors_bulk.append(f"⬜ {center_f} {week_f}: sin archivo Concessions")
                                     prog.progress((i+1)/total_folders)
                                     continue
 
@@ -1619,9 +1615,9 @@ if tab_proc:
                                     )
                                     _audit(f"Bulk import: {center_f} {week_f} — {len(df_bulk)} conductores")
                                 else:
-                                    errors_bulk.append(f"❌ {folder.name}: error en procesamiento")
+                                    errors_bulk.append(f"❌ {center_f} {week_f}: error en procesamiento")
 
-                                    prog.progress((i+1)/total_folders)
+                                prog.progress((i+1)/total_folders)
 
                         prog.progress(1.0)
 
