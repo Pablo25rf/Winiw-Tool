@@ -25,7 +25,6 @@ import re
 import os
 import logging
 import html as _html
-import numpy as np
 import altair as alt
 from datetime import datetime, timedelta
 
@@ -228,7 +227,7 @@ def cached_meta(_db_config_key: str, db_config: dict, allowed_weeks: list = None
                 where = f"WHERE semana IN ({placeholders})"
                 params = allowed_weeks
             df = pd.read_sql_query(
-                f"SELECT DISTINCT centro, semana, calificacion, MAX(fecha_semana) AS fecha_semana FROM scorecards {where} GROUP BY centro, semana, calificacion ORDER BY fecha_semana DESC, semana DESC",
+                f"SELECT DISTINCT centro, semana, calificacion FROM scorecards {where} ORDER BY fecha_semana DESC, semana DESC",
                 conn, params=params
             )
         return df
@@ -413,7 +412,7 @@ def _cached_sidebar_stats(_db_config_key: str, db_config: dict):
 
 
 @st.cache_data(ttl=120, show_spinner=False)
-def cached_user_centro(_db_config_key: str, db_config: dict, username: str):
+def cached_user_centro(_db_config_key: str, db_config: dict, username: str) -> str | None:
     """Centro asignado a un JT. None = sin restricción."""
     return scorecard.get_user_centro(username, db_config)
 
@@ -691,13 +690,13 @@ def _get_user_credentials(username: str, db_config: dict) -> tuple:
         return None, None
 
 
-def get_user_password_hash(username: str, db_config: dict):
+def get_user_password_hash(username: str, db_config: dict) -> str | None:
     """Obtiene el hash de contraseña de un usuario. Devuelve None si no existe."""
     pw_hash, _ = _get_user_credentials(username, db_config)
     return pw_hash
 
 
-def get_user_data(username: str, db_config: dict):
+def get_user_data(username: str, db_config: dict) -> dict | None:
     """Obtiene username, role y must_change_password de un usuario activo."""
     _, user_dict = _get_user_credentials(username, db_config)
     return user_dict
@@ -708,7 +707,7 @@ def update_user_password(username: str, new_hash: str, db_config: dict) -> bool:
     return scorecard.update_user_password(username, new_hash, db_config)
 
 
-def get_user_role(username: str, db_config: dict):
+def get_user_role(username: str, db_config: dict) -> str | None:
     """Devuelve el rol de un usuario o None si no existe."""
     try:
         with scorecard.db_connection(db_config) as conn:
@@ -768,11 +767,9 @@ def render_calificacion(cal: str) -> str:
 
 
 def render_detalles(detalles_str: str) -> str:
-    s = str(detalles_str).strip()
-    if not s or s in ('Óptimo', 'nan', ''):
+    if not detalles_str or str(detalles_str).strip() in ('Óptimo', 'nan', ''):
         return badge('✅ Óptimo', '#198754')
-    parts = re.split(r'[,|]', s)
-    issues = [i.strip() for i in parts if i.strip()]
+    issues = [i.strip() for i in str(detalles_str).split(',') if i.strip()]
     html_parts = []
     for issue in issues:
         color = '#6c757d'
@@ -1004,10 +1001,10 @@ st.markdown("""
 st.markdown("---")
 
 if is_admin:
-    tabs = st.tabs(["🏢 Dashboard", "📤 Subir Métricas", "📋 Scorecards Estación", "📊 Métricas DAs", "📈 Histórico", "👤 Perfil", "👑 Admin"])
+    tabs = st.tabs(["🏢 Dashboard", "🚀 Procesamiento", "📋 DSP Scorecard", "📊 Scorecard", "📈 Histórico", "👤 Perfil", "👑 Admin"])
     tab_dash, tab_proc, tab_dsp, tab_excel, tab_hist, tab_profile, tab_admin = tabs
 else:
-    tabs = st.tabs(["📊 Métricas DAs", "📈 Histórico", "👤 Perfil"])
+    tabs = st.tabs(["📊 Scorecard", "📈 Histórico", "👤 Perfil"])
     tab_excel, tab_hist, tab_profile = tabs
     tab_dash = tab_proc = tab_dsp = tab_admin = None
 
@@ -1320,291 +1317,173 @@ if tab_dash:
 
 if tab_proc:
     with tab_proc:
-        st.header("📤 Subir Métricas DAs")
+        st.header("🚀 Procesamiento de Archivos")
+        st.markdown("Sube los archivos semanales de Amazon para generar el scorecard automático.")
 
-        modo = st.radio(
-            "Modo de procesamiento",
-            ["📄 PDF + Concessions (recomendado)", "📁 Múltiples CSV (clásico)"],
-            horizontal=True,
-            help="PDF+Concessions usa el scorecard semanal oficial y el CSV de Concessions — solo 2 archivos. El modo clásico requiere Quality, False Scan, DWC, FDPS adicionales."
+        uploaded_files = st.file_uploader(
+            "📁 Arrastra o selecciona archivos",
+            accept_multiple_files=True,
+            help="Soporta: CSV, XLSX, HTML (Concessions, Quality, False Scan, DWC, FDPS)"
         )
-        st.divider()
 
-        # ─── MODO SIMPLIFICADO: PDF + Concessions CSV ─────────────────
-        if modo.startswith("📄"):
-            st.markdown("Sube el **PDF del scorecard semanal** y el **CSV de Concessions** (DSP_Associates_Concessions). Solo 2 archivos.")
+        if uploaded_files:
+            batches = {}
+            for f in uploaded_files:
+                week, center, _year_file = scorecard.extract_info_from_path(f.name)
+                bk = (week, center)
+                if bk not in batches:
+                    batches[bk] = {
+                        'concessions': [], 'dsc_concessions': [], 'quality': [], 'false_scan': [],
+                        'dwc': [], 'fdps': [], 'daily': [], 'official': [],
+                        'files_count': 0,
+                        'year': _year_file,
+                    }
+                elif _year_file and not batches[bk].get('year'):
+                    batches[bk]['year'] = _year_file
+                name = f.name.lower()
+                if re.match(scorecard.Config.PATTERN_DSC_CONCESSIONS, name, re.IGNORECASE):
+                    batches[bk]['dsc_concessions'].append(f)
+                elif re.match(scorecard.Config.PATTERN_CONCESSIONS, name, re.IGNORECASE):
+                    batches[bk]['concessions'].append(f)
+                elif re.match(scorecard.Config.PATTERN_QUALITY, name, re.IGNORECASE):
+                    batches[bk]['quality'].append(f)
+                elif re.match(scorecard.Config.PATTERN_FALSE_SCAN, name, re.IGNORECASE):
+                    batches[bk]['false_scan'].append(f)
+                elif re.match(scorecard.Config.PATTERN_DWC, name, re.IGNORECASE):
+                    batches[bk]['dwc'].append(f)
+                elif re.match(scorecard.Config.PATTERN_FDPS, name, re.IGNORECASE):
+                    batches[bk]['fdps'].append(f)
+                elif re.match(scorecard.Config.PATTERN_DAILY, name, re.IGNORECASE):
+                    batches[bk]['daily'].append(f)
+                elif re.match(scorecard.Config.PATTERN_OFFICIAL_SCORECARD, name, re.IGNORECASE):
+                    batches[bk]['official'].append(f)
+                batches[bk]['files_count'] += 1
 
-            col_pdf, col_csv = st.columns(2)
-            with col_pdf:
-                uploaded_pdf = st.file_uploader(
-                    "📋 PDF Scorecard semanal",
-                    type=["pdf"],
-                    key="pdf_simple",
-                    help="Archivo PDF semanal del DSP Scorecard (ej: DMA3_W10_2026_Scorecard.pdf)"
-                )
-            with col_csv:
-                uploaded_conc = st.file_uploader(
-                    "📊 CSV Concessions",
-                    type=["csv", "xlsx"],
-                    key="conc_simple",
-                    help="Archivo DSP_Associates_Concessions con nombres, IDs, DNR y RTS"
-                )
+            for (week, center), data in batches.items():
+                with st.expander(f"📍 {center} | 📅 {week} ({data['files_count']} archivos)", expanded=True):
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.caption("Archivos detectados:")
+                        for tipo, files in [
+                            ("Concessions", data['concessions']),
+                            ("Quality", data['quality']),
+                            ("False Scan", data['false_scan']),
+                        ]:
+                            icon = "✅" if files else "⬜"
+                            st.markdown(f"{icon} {tipo}: {len(files)}")
+                    with c2:
+                        st.caption("&nbsp;")
+                        for tipo, files in [
+                            ("DWC/IADC", data['dwc']),
+                            ("FDPS", data['fdps']),
+                            ("Daily", data['daily']),
+                        ]:
+                            icon = "✅" if files else "⬜"
+                            st.markdown(f"{icon} {tipo}: {len(files)}")
 
-            if uploaded_pdf and uploaded_conc:
-                week_pdf, center_pdf, year_pdf = scorecard.extract_info_from_path(uploaded_pdf.name)
-                week_csv, center_csv, year_csv = scorecard.extract_info_from_path(uploaded_conc.name)
+                    st.divider()
+                    st.subheader("🎯 Targets de Calidad")
+                    curr_t = cached_center_targets(_DB_KEY, db_config, center)
+                    col1, col2, col3, col4 = st.columns(4)
+                    t_dnr  = col1.number_input("DNR Max",    value=float(curr_t['target_dnr']),
+                                               min_value=0.0, max_value=20.0, step=0.5,
+                                               key=f"dnr_{center}_{week}",
+                                               help="Número máximo de DNR permitido (0–20)")
+                    t_dcr  = col2.number_input("DCR Min (%)", value=float(curr_t['target_dcr']*100),
+                                               min_value=80.0, max_value=100.0, step=0.1,
+                                               key=f"dcr_{center}_{week}",
+                                               help="Porcentaje mínimo de DCR (80–100%)") / 100
+                    t_pod  = col3.number_input("POD Min (%)", value=float(curr_t['target_pod']*100),
+                                               min_value=80.0, max_value=100.0, step=0.1,
+                                               key=f"pod_{center}_{week}",
+                                               help="Porcentaje mínimo de POD (80–100%)") / 100
+                    t_cc   = col4.number_input("CC Min (%)",  value=float(curr_t['target_cc']*100),
+                                               min_value=80.0, max_value=100.0, step=0.1,
+                                               key=f"cc_{center}_{week}",
+                                               help="Porcentaje mínimo de CC (80–100%)") / 100
 
-                detected_week   = week_pdf   if week_pdf   != "N/A" else week_csv
-                detected_center = center_pdf if center_pdf != "TDSL" else center_csv
-                detected_year   = year_pdf   or year_csv or datetime.now().year
-
-                st.info(f"📍 Detectado: **{detected_center}** | 📅 **{detected_week}** | 📆 **{detected_year}**")
-
-                col_w, col_c = st.columns(2)
-                with col_w:
-                    week_final = st.text_input("Semana", value=detected_week, key="pdf_week")
-                with col_c:
-                    center_final = st.text_input("Centro", value=detected_center, key="pdf_center")
-                year_final = st.number_input("Año", value=int(detected_year),
-                                             min_value=2020, max_value=2030, step=1, key="pdf_year")
-
-                st.divider()
-                st.subheader("🎯 Targets de Calidad")
-                curr_t_pdf = cached_center_targets(_DB_KEY, db_config, center_final)
-                cp1, cp2, cp3, cp4 = st.columns(4)
-                tp_dnr = cp1.number_input("DNR Max", value=float(curr_t_pdf['target_dnr']),
-                                          min_value=0.0, max_value=20.0, step=0.5, key="pdf_t_dnr")
-                tp_dcr = cp2.number_input("DCR Min (%)", value=float(curr_t_pdf['target_dcr']*100),
-                                          min_value=80.0, max_value=100.0, step=0.1, key="pdf_t_dcr") / 100
-                tp_pod = cp3.number_input("POD Min (%)", value=float(curr_t_pdf['target_pod']*100),
-                                          min_value=80.0, max_value=100.0, step=0.1, key="pdf_t_pod") / 100
-                tp_cc  = cp4.number_input("CC Min (%)",  value=float(curr_t_pdf['target_cc']*100),
-                                          min_value=80.0, max_value=100.0, step=0.1, key="pdf_t_cc") / 100
-
-                st.divider()
-                if st.button("🚀 Procesar PDF + Concessions", type="primary", use_container_width=True, key="btn_pdf_simple"):
-                    with st.spinner("⚙️ Procesando PDF y Concessions CSV..."):
-                        new_t_pdf = {
-                            'centro': center_final, 'target_dnr': tp_dnr, 'target_dcr': tp_dcr,
-                            'target_pod': tp_pod, 'target_cc': tp_cc,
-                            'target_fdps': 0.98, 'target_rts': 0.01, 'target_cdf': 0.95
-                        }
-                        scorecard.save_center_targets(new_t_pdf, db_config=db_config)
-                        cached_center_targets.clear()
-
-                        pdf_bytes = uploaded_pdf.read()
-                        conc_raw  = scorecard.read_any_safe(uploaded_conc, uploaded_conc.name)
-
-                        if conc_raw is None or conc_raw.empty:
-                            st.error("❌ No se pudo leer el archivo Concessions.")
+                    st.divider()
+                    if st.button(f"🚀 Generar Scorecard {center} — {week}", key=f"btn_{center}_{week}",
+                                 type="primary", use_container_width=True):
+                        if not data['concessions']:
+                            st.error("❌ Se requiere al menos un archivo de 'Concessions'")
                         else:
-                            df_pdf = scorecard.process_from_pdf_and_concessions(
-                                pdf_bytes, conc_raw, targets=new_t_pdf
-                            )
-                            if df_pdf is not None:
-                                scorecard.delete_scorecard_batch(
-                                    week_final, center_final, db_config=db_config, year=int(year_final)
+                            with st.spinner("⚙️ Procesando..."):
+                                new_t = {
+                                    'centro': center, 'target_dnr': t_dnr, 'target_dcr': t_dcr,
+                                    'target_pod': t_pod, 'target_cc': t_cc,
+                                    'target_fdps': 0.98, 'target_rts': 0.01, 'target_cdf': 0.95
+                                }
+                                scorecard.save_center_targets(new_t, db_config=db_config)
+                                cached_center_targets.clear()
+                                current_week   = week_manual if week_manual else week
+                                current_center = center_manual if center_manual else center
+                                _year_to_save = data.get('year')
+                                if _year_to_save is None:
+                                    # Por defecto 2025 (quirúrgico)
+                                    _year_to_save = 2025
+                                    
+                                df = scorecard.process_single_batch(
+                                    data['concessions'], data['quality'], data['false_scan'],
+                                    data['dwc'], data['fdps'], data['daily'],
+                                    path_dsc_concessions=data.get('dsc_concessions') or None,
+                                    targets=new_t
                                 )
-                                ok = scorecard.save_to_database(
-                                    df_pdf, week_final, center_final,
-                                    db_config=db_config,
-                                    uploaded_by=user_data_session['name'],
-                                    year=int(year_final),
-                                    clean_first=False,
-                                )
-                                _clear_all_caches()
-                                _audit(f"PDF+Conc: procesó {center_final} {week_final} — {len(df_pdf)} conductores")
+                                if df is not None:
+                                    ok = scorecard.save_to_database(
+                                        df, current_week, current_center,
+                                        db_config=db_config,
+                                        uploaded_by=user_data_session['name'],
+                                        year=_year_to_save,
+                                    )
+                                    # Invalidar solo el caché relacionado con este lote
+                                    # (no borramos todo para no perjudicar a usuarios concurrentes)
+                                    _clear_all_caches()
+                                    _audit(f"Procesó {current_center} {current_week} — {len(df)} conductores")
 
-                                if ok:
-                                    st.success(f"✅ {len(df_pdf)} conductores procesados y guardados.")
-                                    c1, c2, c3, c4 = st.columns(4)
-                                    c1.metric("Conductores", len(df_pdf))
-                                    c2.metric("DNR Promedio", f"{df_pdf['DNR'].mean():.2f}")
-                                    c3.metric("💎 FANTASTIC", (df_pdf['CALIFICACION']=='💎 FANTASTIC').sum())
-                                    c4.metric("🛑 POOR", (df_pdf['CALIFICACION']=='🛑 POOR').sum())
+                                    if ok:
+                                        st.success(f"✅ {len(df)} conductores procesados y guardados.")
+
+                                        # ── H) Alertas automáticas ──────────────────────
+                                        try:
+                                            smtp_cfg   = dict(st.secrets.get("smtp", {})) if hasattr(st, 'secrets') else {}
+                                            alert_mail = st.secrets.get("alert_email", "") if hasattr(st, 'secrets') else ""
+                                            if smtp_cfg and alert_mail:
+                                                n_alerted = scorecard.check_and_send_alerts(
+                                                    current_week, current_center,
+                                                    smtp_cfg=smtp_cfg,
+                                                    alert_email=alert_mail,
+                                                    db_config=db_config
+                                                )
+                                                if n_alerted > 0:
+                                                    st.warning(
+                                                        f"⚠️ Alerta enviada: {n_alerted} conductor(es) "
+                                                        f"en POOR 2 semanas consecutivas."
+                                                    )
+                                        except Exception as _ae:
+                                            _log.warning(f"Alertas: {_ae}")
+                                    else:
+                                        st.warning("⚠️ Procesado pero error al guardar en BD.")
+
                                     output = io.BytesIO()
                                     scorecard.create_professional_excel(
-                                        df_pdf, output, center_name=center_final, week=week_final
+                                        df, output, center_name=current_center, week=current_week
                                     )
                                     st.download_button(
                                         "📥 Descargar Excel",
                                         output.getvalue(),
-                                        f"Scorecard_{center_final}_{week_final}.xlsx",
+                                        f"Scorecard_{current_center}_{current_week}.xlsx",
                                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                         use_container_width=True
                                     )
+                                    # Resumen rápido
+                                    c1, c2, c3, c4 = st.columns(4)
+                                    c1.metric("Conductores", len(df))
+                                    c2.metric("DNR Promedio", f"{df['DNR'].mean():.2f}")
+                                    c3.metric("💎 FANTASTIC", (df['CALIFICACION']=='💎 FANTASTIC').sum())
+                                    c4.metric("🛑 POOR", (df['CALIFICACION']=='🛑 POOR').sum())
                                 else:
-                                    st.warning("⚠️ Procesado pero error al guardar en BD.")
-                            else:
-                                st.error("❌ Error en el procesamiento. Verifica los archivos.")
-
-        # ─── MODO CLÁSICO: múltiples CSV ──────────────────────────────
-        else:
-            st.markdown("Sube los archivos semanales de Amazon para calcular las métricas por conductor (Concessions, Quality, False Scan, DWC, FDPS).")
-
-            uploaded_files = st.file_uploader(
-                "📁 Arrastra o selecciona archivos",
-                accept_multiple_files=True,
-                help="Soporta: CSV, XLSX, HTML (Concessions, Quality, False Scan, DWC, FDPS)",
-                key="classic_uploader"
-            )
-
-            if uploaded_files:
-                batches = {}
-                for f in uploaded_files:
-                    week, center, _year_file = scorecard.extract_info_from_path(f.name)
-                    bk = (week, center)
-                    if bk not in batches:
-                        batches[bk] = {
-                            'concessions': [], 'dsc_concessions': [], 'quality': [], 'false_scan': [],
-                            'dwc': [], 'fdps': [], 'daily': [], 'official': [],
-                            'files_count': 0,
-                            'year': _year_file,
-                        }
-                    elif _year_file and not batches[bk].get('year'):
-                        batches[bk]['year'] = _year_file
-                    name = f.name.lower()
-                    if re.match(scorecard.Config.PATTERN_DSC_CONCESSIONS, name, re.IGNORECASE):
-                        batches[bk]['dsc_concessions'].append(f)
-                    elif re.match(scorecard.Config.PATTERN_CONCESSIONS, name, re.IGNORECASE):
-                        batches[bk]['concessions'].append(f)
-                    elif re.match(scorecard.Config.PATTERN_QUALITY, name, re.IGNORECASE):
-                        batches[bk]['quality'].append(f)
-                    elif re.match(scorecard.Config.PATTERN_FALSE_SCAN, name, re.IGNORECASE):
-                        batches[bk]['false_scan'].append(f)
-                    elif re.match(scorecard.Config.PATTERN_DWC, name, re.IGNORECASE):
-                        batches[bk]['dwc'].append(f)
-                    elif re.match(scorecard.Config.PATTERN_FDPS, name, re.IGNORECASE):
-                        batches[bk]['fdps'].append(f)
-                    elif re.match(scorecard.Config.PATTERN_DAILY, name, re.IGNORECASE):
-                        batches[bk]['daily'].append(f)
-                    elif re.match(scorecard.Config.PATTERN_OFFICIAL_SCORECARD, name, re.IGNORECASE):
-                        batches[bk]['official'].append(f)
-                    batches[bk]['files_count'] += 1
-
-                for (week, center), data in batches.items():
-                    with st.expander(f"📍 {center} | 📅 {week} ({data['files_count']} archivos)", expanded=True):
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            st.caption("Archivos detectados:")
-                            for tipo, files in [
-                                ("Concessions", data['concessions']),
-                                ("Quality", data['quality']),
-                                ("False Scan", data['false_scan']),
-                            ]:
-                                icon = "✅" if files else "⬜"
-                                st.markdown(f"{icon} {tipo}: {len(files)}")
-                        with c2:
-                            st.caption("&nbsp;")
-                            for tipo, files in [
-                                ("DWC/IADC", data['dwc']),
-                                ("FDPS", data['fdps']),
-                                ("Daily", data['daily']),
-                            ]:
-                                icon = "✅" if files else "⬜"
-                                st.markdown(f"{icon} {tipo}: {len(files)}")
-
-                        st.divider()
-                        st.subheader("🎯 Targets de Calidad")
-                        curr_t = cached_center_targets(_DB_KEY, db_config, center)
-                        col1, col2, col3, col4 = st.columns(4)
-                        t_dnr  = col1.number_input("DNR Max",    value=float(curr_t['target_dnr']),
-                                                   min_value=0.0, max_value=20.0, step=0.5,
-                                                   key=f"dnr_{center}_{week}",
-                                                   help="Número máximo de DNR permitido (0–20)")
-                        t_dcr  = col2.number_input("DCR Min (%)", value=float(curr_t['target_dcr']*100),
-                                                   min_value=80.0, max_value=100.0, step=0.1,
-                                                   key=f"dcr_{center}_{week}",
-                                                   help="Porcentaje mínimo de DCR (80–100%)") / 100
-                        t_pod  = col3.number_input("POD Min (%)", value=float(curr_t['target_pod']*100),
-                                                   min_value=80.0, max_value=100.0, step=0.1,
-                                                   key=f"pod_{center}_{week}",
-                                                   help="Porcentaje mínimo de POD (80–100%)") / 100
-                        t_cc   = col4.number_input("CC Min (%)",  value=float(curr_t['target_cc']*100),
-                                                   min_value=80.0, max_value=100.0, step=0.1,
-                                                   key=f"cc_{center}_{week}",
-                                                   help="Porcentaje mínimo de CC (80–100%)") / 100
-
-                        st.divider()
-                        if st.button(f"🚀 Procesar Métricas {center} — {week}", key=f"btn_{center}_{week}",
-                                     type="primary", use_container_width=True):
-                            if not data['concessions']:
-                                st.error("❌ Se requiere al menos un archivo de 'Concessions'")
-                            else:
-                                with st.spinner("⚙️ Procesando..."):
-                                    new_t = {
-                                        'centro': center, 'target_dnr': t_dnr, 'target_dcr': t_dcr,
-                                        'target_pod': t_pod, 'target_cc': t_cc,
-                                        'target_fdps': 0.98, 'target_rts': 0.01, 'target_cdf': 0.95
-                                    }
-                                    scorecard.save_center_targets(new_t, db_config=db_config)
-                                    cached_center_targets.clear()
-                                    current_week   = week_manual if week_manual else week
-                                    current_center = center_manual if center_manual else center
-                                    _year_to_save = data.get('year')
-                                    if _year_to_save is None:
-                                        _year_to_save = datetime.now().year
-
-                                    scorecard.delete_scorecard_batch(current_week, current_center, db_config=db_config, year=_year_to_save)
-
-                                    df = scorecard.process_single_batch(
-                                        data['concessions'], data['quality'], data['false_scan'],
-                                        data['dwc'], data['fdps'], data['daily'],
-                                        path_dsc_concessions=data.get('dsc_concessions') or None,
-                                        targets=new_t
-                                    )
-                                    if df is not None:
-                                        ok = scorecard.save_to_database(
-                                            df, current_week, current_center,
-                                            db_config=db_config,
-                                            uploaded_by=user_data_session['name'],
-                                            year=_year_to_save,
-                                            clean_first=False,
-                                        )
-                                        _clear_all_caches()
-                                        _audit(f"Procesó {current_center} {current_week} — {len(df)} conductores")
-
-                                        if ok:
-                                            st.success(f"✅ {len(df)} conductores procesados y guardados.")
-
-                                            try:
-                                                smtp_cfg   = dict(st.secrets.get("smtp", {})) if hasattr(st, 'secrets') else {}
-                                                alert_mail = st.secrets.get("alert_email", "") if hasattr(st, 'secrets') else ""
-                                                if smtp_cfg and alert_mail:
-                                                    n_alerted = scorecard.check_and_send_alerts(
-                                                        current_week, current_center,
-                                                        smtp_cfg=smtp_cfg,
-                                                        alert_email=alert_mail,
-                                                        db_config=db_config
-                                                    )
-                                                    if n_alerted > 0:
-                                                        st.warning(
-                                                            f"⚠️ Alerta enviada: {n_alerted} conductor(es) "
-                                                            f"en POOR 2 semanas consecutivas."
-                                                        )
-                                            except Exception as _ae:
-                                                _log.warning(f"Alertas: {_ae}")
-                                        else:
-                                            st.warning("⚠️ Procesado pero error al guardar en BD.")
-
-                                        output = io.BytesIO()
-                                        scorecard.create_professional_excel(
-                                            df, output, center_name=current_center, week=current_week
-                                        )
-                                        st.download_button(
-                                            "📥 Descargar Excel",
-                                            output.getvalue(),
-                                            f"Scorecard_{current_center}_{current_week}.xlsx",
-                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                            use_container_width=True
-                                        )
-                                        c1, c2, c3, c4 = st.columns(4)
-                                        c1.metric("Conductores", len(df))
-                                        c2.metric("DNR Promedio", f"{df['DNR'].mean():.2f}")
-                                        c3.metric("💎 FANTASTIC", (df['CALIFICACION']=='💎 FANTASTIC').sum())
-                                        c4.metric("🛑 POOR", (df['CALIFICACION']=='🛑 POOR').sum())
-                                    else:
-                                        st.error("❌ Error en el procesamiento. Verifica los archivos.")
+                                    st.error("❌ Error en el procesamiento. Verifica los archivos.")
 
         # ── I) Importación histórica masiva (ZIP) ─────────────────────────
         if is_admin:
@@ -1713,7 +1592,7 @@ if tab_proc:
                                 )
 
                                 if df_bulk is not None:
-                                    _year_to_save_b = year_f if year_f else datetime.now().year
+                                    _year_to_save_b = year_f if year_f else 2025
                                     ok_b = scorecard.save_to_database(
                                         df_bulk, week_f, center_f,
                                         db_config=db_config,
@@ -1728,7 +1607,7 @@ if tab_proc:
                                 else:
                                     errors_bulk.append(f"❌ {folder.name}: error en procesamiento")
 
-                                prog.progress((i+1)/total_folders)
+                                    prog.progress((i+1)/total_folders)
 
                         prog.progress(1.0)
 
@@ -1752,8 +1631,8 @@ if tab_proc:
 
 if tab_dsp:
     with tab_dsp:
-        st.header("📋 Scorecards Estación — PDF oficial Amazon")
-        st.markdown("Sube los PDFs semanales de Amazon (1 por estación/semana) para guardar los KPIs oficiales de estación en la BD.")
+        st.header("📋 DSP Weekly Scorecard — PDF oficial Amazon")
+        st.markdown("Sube los PDFs semanales para guardar KPIs oficiales de estación y actualizar métricas de conductores.")
 
         _last_result = st.session_state.pop('_dsp_last_result', None)
         if _last_result:
@@ -1800,7 +1679,7 @@ if tab_dsp:
                 return (f'<span style="background:{c};color:#fff;padding:2px 8px;'
                         f'border-radius:3px;font-size:.78em;font-weight:600">{tier or "—"}</span>')
 
-            def _block_hdr(icon: str, title: str, tier=None) -> str:
+            def _block_hdr(icon: str, title: str, tier: str | None = None) -> str:
                 c = _AMAZON_COLORS.get(tier, '#495057')
                 badge = f' {_amz_badge(tier)}' if tier else ''
                 return (f'<div style="background:#f0f2f6;border-left:4px solid {c};'
@@ -1859,7 +1738,7 @@ if tab_dsp:
                         _s = _p['station']
                         _c, _w, _yr = _m['centro'], _m['semana'], _m.get('year')
                         if _yr is None:
-                            _yr = datetime.now().year
+                            _yr = 2025
                         try:
                             _ok_st, _err_st = scorecard.save_station_scorecard(
                                 _s, _w, _c, db_config, user_data_session['name'],
@@ -2035,7 +1914,7 @@ if tab_dsp:
                                 st.warning(f"⚠️ Campos no encontrados: {', '.join(_p['errors'])}")
 
         st.divider()
-        st.subheader("📊 Histórico Scorecards Estación (BD)")
+        st.subheader("📊 Histórico DSP Scorecard por Estación")
         try:
             df_ss = scorecard.get_station_scorecards(db_config)
             if df_ss.empty:
@@ -2127,7 +2006,7 @@ if tab_dsp:
 # ─────────────────────────────────────────────────────────────────────────────
 
 with tab_excel:
-    st.header("📊 Métricas DAs")
+    st.header("📊 Scorecard Semanal")
 
     try:
         # Semanas visibles según rol
@@ -2146,13 +2025,8 @@ with tab_excel:
             df_available = df_available[df_available['centro'] == JT_CENTRO]
 
         if df_available.empty:
-            st.info("📭 No hay métricas disponibles. Sube archivos en 'Subir Métricas' primero.")
+            st.info("📭 No hay scorecards disponibles. Procesa archivos primero.")
         else:
-            if is_admin and active_weeks:
-                st.caption(
-                    f"📅 Mostrando las **{len(active_weeks)} semanas más recientes** "
-                    f"({', '.join(active_weeks)}). El histórico completo está en el tab 📈 Histórico."
-                )
             if is_jt and allowed:
                 st.info(
                     f"👔 Tienes acceso a: **{' y '.join(allowed)}** "
@@ -2171,7 +2045,7 @@ with tab_excel:
                 selected_week = st.selectbox("📅 Semana", weeks_for_center)
 
             # Botón o auto-load
-            load_btn = st.button("📊 Cargar Métricas", type="primary", use_container_width=True)
+            load_btn = st.button("📊 Cargar Scorecard", type="primary", use_container_width=True)
 
             if load_btn:
                 st.session_state['sc_week']   = selected_week
@@ -2466,11 +2340,8 @@ with tab_excel:
                                 _metric_row("Entregas", row.get('entregados'), None, is_int=True, is_pct=False) +
                                 _metric_row("DNR", row.get('dnr'), _t.get('target_dnr', 0.5),
                                             higher_is_better=False, is_pct=False, is_int=True) +
-                                _metric_row(
-                                    "DSC DPMO" if has_pdf else "False Scans",
-                                    row.get('fs_count'),
-                                    1490 if has_pdf else 5,
-                                    higher_is_better=False, is_pct=False, is_int=True) +
+                                _metric_row("False Scans", row.get('fs_count'), 5,
+                                            higher_is_better=False, is_pct=False, is_int=True) +
                                 _metric_row("DCR", row.get('dcr'), _t.get('target_dcr', 0.995)) +
                                 _metric_row("POD", row.get('pod'), _t.get('target_pod', 0.99)) +
                                 _metric_row("CC",  row.get('cc'),  _t.get('target_cc', 0.99)) +
@@ -2799,7 +2670,7 @@ with tab_excel:
 # ─────────────────────────────────────────────────────────────────────────────
 
 with tab_hist:
-    st.header("📈 Histórico de Métricas DAs")
+    st.header("📈 Histórico de Scorecards")
 
     try:
         # JTs: solo semanas permitidas + centro asignado si tiene. Admins: todo.
@@ -3134,7 +3005,7 @@ with tab_profile:
     |---|---|
     | **Usuario** | {user_data_session['name']} |
     | **Rol** | {role_label} |
-    | **Sesión inicia** | {st.session_state.get('login_time', '—')} |
+    | **Sesión inicia** | {st.session_state.get('last_activity', '—')} |
     | **Timeout** | {SESSION_TIMEOUT_MINUTES} min de inactividad |
     """)
 
@@ -3729,20 +3600,14 @@ if tab_admin:
             with st.form("clean_batch_form"):
                 clean_center = st.text_input("Centro")
                 clean_week   = st.text_input("Semana", placeholder="ej: W05")
-                clean_year   = st.number_input("Año", value=datetime.now().year,
-                                               min_value=2020, max_value=2035, step=1,
-                                               help="Dejar en blanco borra TODOS los años")
-                clean_all_years = st.checkbox("Borrar todos los años", value=False)
                 if st.form_submit_button("Limpiar"):
                     if clean_center and clean_week:
-                        yr = None if clean_all_years else int(clean_year)
-                        scorecard.delete_scorecard_batch(clean_week, clean_center, db_config=db_config, year=yr)
+                        scorecard.delete_scorecard_batch(clean_week, clean_center, db_config=db_config)
                         _clear_all_caches()
-                        yr_label = "todos los años" if yr is None else str(yr)
-                        _audit(f"Eliminó lote {clean_center} {clean_week} ({yr_label})")
-                        st.success(f"✅ {clean_center} — {clean_week} ({yr_label}) eliminado")
+                        _audit(f"Eliminó lote {clean_center} {clean_week}")
+                        st.success(f"✅ {clean_center} — {clean_week} eliminado")
                     else:
-                        st.error("Completa centro y semana")
+                        st.error("Completa ambos campos")
 
         with col3:
             st.markdown("#### ⚙️ Mantenimiento")
