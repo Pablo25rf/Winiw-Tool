@@ -1001,10 +1001,10 @@ st.markdown("""
 st.markdown("---")
 
 if is_admin:
-    tabs = st.tabs(["🏢 Dashboard", "🚀 Procesamiento", "📋 DSP Scorecard", "📊 Scorecard", "📈 Histórico", "👤 Perfil", "👑 Admin"])
+    tabs = st.tabs(["🏢 Dashboard", "📤 Subir Archivos", "📋 Subir PDFs", "📊 Ver Conductores", "📈 Histórico", "👤 Perfil", "👑 Admin"])
     tab_dash, tab_proc, tab_dsp, tab_excel, tab_hist, tab_profile, tab_admin = tabs
 else:
-    tabs = st.tabs(["📊 Scorecard", "📈 Histórico", "👤 Perfil"])
+    tabs = st.tabs(["📊 Ver Conductores", "📈 Histórico", "👤 Perfil"])
     tab_excel, tab_hist, tab_profile = tabs
     tab_dash = tab_proc = tab_dsp = tab_admin = None
 

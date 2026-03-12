@@ -1826,11 +1826,7 @@ def init_database(db_config: Optional[Dict] = None):
         # ── MIGRACIÓN v3.9b: columna 'anio' en scorecards y wh_exceptions ───
         # INTEGER con el año ISO extraído de fecha_semana.
         # Permite filtrar por año en Power BI sin parsear fechas.
-        for _tbl, _type in [
-            ("scorecards",         "INTEGER"),
-            ("wh_exceptions",      "INTEGER"),
-            ("station_scorecards", "INTEGER"),
-        ]:
+        for _tbl in ("scorecards", "wh_exceptions"):
             try:
                 if is_postgres:
                     cursor.execute(f"ALTER TABLE {_tbl} ADD COLUMN IF NOT EXISTS anio INTEGER")
@@ -1840,6 +1836,52 @@ def init_database(db_config: Optional[Dict] = None):
                         cursor.execute(f"ALTER TABLE {_tbl} ADD COLUMN anio INTEGER")
             except Exception as _e:
                 logger.warning(f"Migración v3.9b anio en {_tbl}: {_e}")
+
+        # station_scorecards: añadir columna anio Y actualizar UNIQUE constraint
+        # (el constraint antiguo era UNIQUE(semana,centro); el INSERT usa ON CONFLICT(semana,centro,anio))
+        try:
+            if is_postgres:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        -- 1. Añadir columna si no existe
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'station_scorecards' AND column_name = 'anio'
+                        ) THEN
+                            ALTER TABLE station_scorecards ADD COLUMN anio INTEGER;
+                        END IF;
+
+                        -- 2. Eliminar constraint antiguo sin anio (si existe con ese nombre)
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.table_constraints
+                            WHERE table_name = 'station_scorecards'
+                              AND constraint_type = 'UNIQUE'
+                              AND constraint_name = 'station_scorecards_semana_centro_key'
+                        ) THEN
+                            ALTER TABLE station_scorecards
+                                DROP CONSTRAINT station_scorecards_semana_centro_key;
+                        END IF;
+
+                        -- 3. Añadir constraint con anio si no existe aún
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.table_constraints
+                            WHERE table_name = 'station_scorecards'
+                              AND constraint_type = 'UNIQUE'
+                              AND constraint_name = 'station_scorecards_semana_centro_anio_key'
+                        ) THEN
+                            ALTER TABLE station_scorecards
+                                ADD CONSTRAINT station_scorecards_semana_centro_anio_key
+                                UNIQUE (semana, centro, anio);
+                        END IF;
+                    END $$;
+                """)
+            else:
+                cursor.execute("PRAGMA table_info(station_scorecards)")
+                if 'anio' not in [c[1] for c in cursor.fetchall()]:
+                    cursor.execute("ALTER TABLE station_scorecards ADD COLUMN anio INTEGER")
+        except Exception as _e:
+            logger.warning(f"Migración v3.9b station_scorecards anio+constraint: {_e}")
 
         # Rellenar anio para filas existentes que tengan fecha_semana
         for _tbl in ("scorecards", "wh_exceptions", "station_scorecards"):
@@ -1856,6 +1898,13 @@ def init_database(db_config: Optional[Dict] = None):
                     )
             except Exception as _e:
                 logger.warning(f"Migración v3.9b relleno anio {_tbl}: {_e}")
+
+        # Commit intermedio: los cambios DDL quedan persistidos aunque falle
+        # algún paso posterior (bootstrap de usuario, etc.)
+        try:
+            conn.commit()
+        except Exception as _e:
+            logger.warning(f"Commit intermedio migración v3.9b: {_e}")
 
         # ── 6. Tabla de Rate Limiting persistente (v3.5) ────────────────────
         # Necesaria para que el bloqueo de login sobreviva reinicios del servidor

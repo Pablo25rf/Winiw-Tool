@@ -7,31 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [3.9.3] - 2026-03-12
-
-### Fixed — Revisión exhaustiva (Sesión 3)
-
-- **PDF columns never saved to DB** — `save_to_database` now dynamically detects and includes all PDF-mode columns (`entregados_oficial`, `dcr_oficial`, `pod_oficial`, `cc_oficial`, `dsc_dpmo`, `lor_dpmo`, `ce_dpmo`, `cdf_dpmo_oficial`, `pdf_loaded`) in both INSERT and ON CONFLICT DO UPDATE SET
-- **`pdf_loaded` never set to 1** — `process_from_pdf_and_concessions()` now correctly assigns `df_merged['pdf_loaded'] = 1`; fixes the "📄 PDF: 0/N" badge always showing 0
-- **Admin "Limpiar Lote" missing year** — now includes `clean_year` number input and `clean_all_years` checkbox; passes `year=None` only when all-years is checked
-- **`render_detalles` pipe separator ignored** — `re.split(r'[,|]', s)` handles both `,` and `|` separators; the DPMO suffix no longer appears as a single ugly badge
-- **`_block_hdr` Python 3.10+ syntax** — removed `tier: str | None` union type annotation that crashes Python 3.9
-- **Bulk import progress bar stuck** — `prog.progress()` was inside the `else:` block; dedented to run after both branches
-- **"False Scans" label shown for PDF mode** — when `has_pdf=True`, shows "DSC DPMO" with threshold 1490 instead of "False Scans" with threshold 5
-- **Multiple `str | None` annotations in `app.py`** — removed Python 3.10+ union type syntax from function signatures (lines 694, 700, 711, 416)
-- **`secrets.toml.example` wrong section** — was using `[admin]` section that was never read; corrected to top-level keys; added missing `[smtp]` and `alert_email` sections
-- **`_THIS_YEAR = 2025` hardcoded in test file** — replaced with `datetime.now().year`
-- **Profile tab showed `last_activity` as login time** — now shows `login_time` (set at login, not updated on every render)
-- **Motor docstring year** — corrected from "Marzo 2025" to "Marzo 2026"
-
-### Added — Sesión 2: Modo PDF + Concessions
-
-- **`calculate_score_pdf_mode()`** — scoring with Amazon SLS DPMO thresholds (DSC ≤1490, LoR ≤1490, CDF DPMO used as ratio)
-- **`process_from_pdf_and_concessions()`** — merges PDF driver table with Concessions CSV; column reuse: `fs_count` ← DSC DPMO, `dnr_risk_events` ← LoR DPMO, `cdf` ← 1-CDF_DPMO/1M
-- **UI radio selector** in "📤 Subir Métricas" tab to switch between PDF+Concessions (recommended) and classic CSV mode
-
----
-
 ## [3.9.0] - 2026-03-04
 
 ### Fixed — Críticos (seguridad y corrupción silenciosa)
