@@ -5,7 +5,7 @@ Sistema de procesamiento y análisis de métricas de calidad para conductores Am
 Soporta PostgreSQL y SQLite con auto-migraciones y validaciones robustas.
 
 Versión: 3.9
-Fecha: Marzo 2026
+Fecha: Marzo 2025
 """
 
 import pandas as pd
@@ -954,125 +954,6 @@ def calculate_score_v3_robust(row: pd.Series, targets: Optional[Dict] = None) ->
     
     return calificacion, ", ".join(issues) if issues else "Óptimo", score
 
-
-def calculate_score_pdf_mode(row: pd.Series, targets: Optional[Dict] = None) -> Tuple[str, str, int]:
-    """
-    Scoring basado en PDF del scorecard + Concessions CSV.
-    Usa DPMO reales de Amazon (DSC, LoR, CDF) en vez de conteos de CSV.
-    CE (Customer Escalations) penaliza directamente.
-    """
-    t = dict(Config.DEFAULT_TARGETS)
-    if targets:
-        t.update(targets)
-
-    dnr      = safe_number(row.get('DNR', 0), 0)
-    rts      = safe_number(row.get('RTS', 0.0), 0.0)
-    dcr      = safe_number(row.get('DCR', 1.0), 1.0)
-    pod      = safe_number(row.get('POD', 1.0), 1.0)
-    cc       = safe_number(row.get('CC', 1.0), 1.0)
-    dsc_dpmo = safe_number(row.get('FS_Count', 0), 0)
-    lor_dpmo = safe_number(row.get('DNR_RISK_EVENTS', 0), 0)
-    cdf_rate = safe_number(row.get('CDF', 1.0), 1.0)
-    cdf_dpmo = (1.0 - min(max(cdf_rate, 0.0), 1.0)) * 1_000_000
-    ce       = safe_number(row.get('CE', 0), 0)
-
-    dnr = max(0, min(dnr, Config.MAX_DNR))
-    dcr = max(0, min(dcr, 1.0))
-    pod = max(0, min(pod, 1.0))
-    cc  = max(0, min(cc,  1.0))
-    rts = max(0, min(rts, 1.0))
-
-    issues = []
-    score  = 100
-
-    # === DNR ===
-    if dnr >= 4:
-        issues.append(f"🚨 {int(dnr)} DNR (CRÍTICO)")
-        score -= 70
-    elif dnr >= 3:
-        issues.append(f"🚨 {int(dnr)} DNR (MUY GRAVE)")
-        score -= 60
-    elif dnr > t['target_dnr'] * 3:
-        issues.append(f"⚡ {int(dnr)} DNR")
-        score -= 25
-    elif dnr > t['target_dnr']:
-        issues.append(f"⚡ {int(dnr)} DNR")
-        score -= 15
-
-    # === DCR ===
-    if dcr < t['target_dcr'] - 0.05:
-        issues.append(f"📦 DCR Crítico {dcr:.1%}")
-        score -= 40
-    elif dcr < t['target_dcr']:
-        issues.append(f"📦 DCR Bajo {dcr:.1%}")
-        score -= 15
-
-    # === POD ===
-    if pod < t['target_pod'] - 0.10:
-        issues.append(f"📸 POD Crítico {pod:.1%}")
-        score -= 25
-    elif pod < t['target_pod']:
-        issues.append(f"📸 POD Bajo {pod:.1%}")
-        score -= 10
-
-    # === CC ===
-    if cc < t['target_cc']:
-        issues.append(f"📞 CC Bajo {cc:.1%}")
-        score -= 10
-
-    # === DSC DPMO (Scanner Compliance) — umbrales Amazon SLS ===
-    if dsc_dpmo > 1490:
-        issues.append(f"🔍 DSC {int(dsc_dpmo)} DPMO (CRÍTICO)")
-        score -= 30
-    elif dsc_dpmo > 930:
-        issues.append(f"🔍 DSC {int(dsc_dpmo)} DPMO")
-        score -= 10
-
-    # === LoR DPMO (Loss or Return) — umbrales Amazon SLS ===
-    if lor_dpmo > 110:
-        issues.append(f"📬 LoR {int(lor_dpmo)} DPMO (CRÍTICO)")
-        score -= 25
-    elif lor_dpmo > 35:
-        issues.append(f"📬 LoR {int(lor_dpmo)} DPMO")
-        score -= 10
-
-    # === CDF DPMO (Customer Delivery Feedback) — umbrales Amazon SLS ===
-    if cdf_dpmo > 355:
-        issues.append(f"⭐ CDF {int(cdf_dpmo)} DPMO (CRÍTICO)")
-        score -= 20
-    elif cdf_dpmo > 165:
-        issues.append(f"⭐ CDF {int(cdf_dpmo)} DPMO")
-        score -= 8
-
-    # === CE (Customer Escalations) ===
-    if ce >= 2:
-        issues.append(f"🚨 {int(ce)} Escalaciones CE")
-        score -= min(int(ce) * 15, 30)
-    elif ce == 1:
-        issues.append(f"🚨 1 Escalación CE")
-        score -= 15
-
-    # === RTS ===
-    if rts > t.get('target_rts', 0.01) * 2:
-        issues.append(f"🔄 RTS Alto {rts:.1%}")
-        score -= 15
-    elif rts > t.get('target_rts', 0.01):
-        issues.append(f"🔄 RTS {rts:.1%}")
-        score -= 8
-
-    score = max(0, score)
-
-    if score >= 90:
-        calificacion = "💎 FANTASTIC"
-    elif score >= 80:
-        calificacion = "🥇 GREAT"
-    elif score >= 60:
-        calificacion = "⚠️ FAIR"
-    else:
-        calificacion = "🛑 POOR"
-
-    return calificacion, ", ".join(issues) if issues else "Óptimo", score
-
 # ═══════════════════════════════════════════════════════════════
 # GENERACIÓN DE EXCEL
 # ═══════════════════════════════════════════════════════════════
@@ -1395,26 +1276,29 @@ def create_professional_excel(df: pd.DataFrame, output_path: str,
         return False
 
 def delete_scorecard_batch(week: str, center: str, db_config: Optional[Dict] = None,
-                           year: Optional[int] = None) -> bool:
+                           year: Optional[int] = None, preserve_pdf: bool = False) -> bool:
     """Elimina los datos de una semana y centro específicos (Para corregir errores de volcado).
     Si year es None, elimina TODOS los años para ese centro+semana.
     Si year es un int, elimina solo ese año concreto.
+    Si preserve_pdf=True, conserva filas con pdf_loaded=1 (datos oficiales del PDF).
     """
     try:
         is_pg = db_config and db_config.get('type') == 'postgresql'
         ph = '%s' if is_pg else '?'
+        pdf_filter = " AND (pdf_loaded IS NULL OR pdf_loaded = 0)" if preserve_pdf else ""
         with db_connection(db_config) as conn:
             cursor = conn.cursor()
             if year is not None:
-                q = (f"DELETE FROM scorecards WHERE semana = {ph} AND centro = {ph} AND anio = {ph}")
+                q = (f"DELETE FROM scorecards WHERE semana = {ph} AND centro = {ph} AND anio = {ph}{pdf_filter}")
                 cursor.execute(q, (week, center, year))
             else:
-                q = (f"DELETE FROM scorecards WHERE semana = {ph} AND centro = {ph}")
+                q = (f"DELETE FROM scorecards WHERE semana = {ph} AND centro = {ph}{pdf_filter}")
                 cursor.execute(q, (week, center))
             rows = cursor.rowcount
             conn.commit()
         logger.info(f"🗑️ Se eliminaron {rows} registros de {center} semana {week}" +
-                    (f" año {year}" if year else " (todos los años)"))
+                    (f" año {year}" if year else " (todos los años)") +
+                    (" (preservando filas PDF)" if preserve_pdf else ""))
         return True
     except Exception as e:
         logger.error(f"Error eliminando lote: {e}")
@@ -1491,104 +1375,6 @@ def process_single_batch(path_concessions, path_quality=None, path_false_scan=No
         return df_merged
     except Exception as e:
         logger.error(f"Error en procesamiento: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return None
-
-
-def process_from_pdf_and_concessions(
-        pdf_bytes: bytes,
-        concessions_df: pd.DataFrame,
-        targets: Optional[Dict] = None) -> Optional[pd.DataFrame]:
-    """
-    Nuevo flujo simplificado: PDF del scorecard semanal + archivo Concessions CSV.
-
-    El PDF aporta: DCR, POD, CC, DSC DPMO, LoR DPMO, CDF DPMO, CE por DA.
-    El Concessions CSV aporta: Nombre, ID, DNR, RTS, Entregados.
-
-    Retorna un DataFrame compatible con save_to_database().
-    Columnas reutilizadas para almacenar DPMO sin cambiar el esquema DB:
-      FS_Count        ← DSC DPMO (raw)
-      DNR_RISK_EVENTS ← LoR DPMO (raw)
-      CDF             ← 1 - CDF_DPMO / 1_000_000  (ratio 0-1)
-    CE y los DPMO raw también se añaden al campo DETALLES.
-    """
-    try:
-        df_conc = process_concessions(concessions_df)
-        if df_conc is None or df_conc.empty:
-            logger.error("process_from_pdf_and_concessions: Concessions vacío o inválido")
-            return None
-
-        pdf_result = parse_dsp_scorecard_pdf(pdf_bytes)
-        if not pdf_result.get('ok'):
-            logger.error(f"process_from_pdf_and_concessions: Error PDF — {pdf_result.get('errors', [])}")
-            return None
-
-        df_drivers = pdf_result.get('drivers', pd.DataFrame())
-        if df_drivers.empty:
-            logger.error("process_from_pdf_and_concessions: sin tabla de conductores en el PDF")
-            return None
-
-        logger.info(f"PDF conductores: {len(df_drivers)} | Concessions: {len(df_conc)}")
-
-        df_merged = df_conc.merge(df_drivers, left_on='ID', right_on='driver_id', how='left')
-
-        def _col(col_name, fill=0.0):
-            if col_name in df_merged.columns:
-                return pd.to_numeric(df_merged[col_name], errors='coerce').fillna(fill)
-            return pd.Series([fill] * len(df_merged), index=df_merged.index)
-
-        for src_col, dst_col, default in [
-            ('dcr_oficial', 'DCR', 1.0),
-            ('pod_oficial', 'POD', 1.0),
-            ('cc_oficial',  'CC',  1.0),
-        ]:
-            df_merged[dst_col] = _col(src_col, default).clip(0.0, 1.0)
-
-        df_merged['CDF'] = (1.0 - _col('cdf_dpmo_oficial', 0) / 1_000_000).clip(0.0, 1.0)
-        df_merged['FS_Count'] = _col('dsc_dpmo', 0).clip(lower=0)
-        df_merged['DNR_RISK_EVENTS'] = _col('lor_dpmo', 0).clip(lower=0)
-        df_merged['CE'] = _col('ce_dpmo', 0).clip(lower=0)
-
-        if 'entregados_oficial' in df_merged.columns:
-            mask_ent = df_merged['Entregados'].isna() | (df_merged['Entregados'] == 0)
-            df_merged['Entregados'] = np.where(
-                mask_ent,
-                pd.to_numeric(df_merged['entregados_oficial'], errors='coerce').fillna(0),
-                df_merged['Entregados']
-            )
-
-        df_merged['FDPS']       = 1.0
-        df_merged['pdf_loaded'] = 1
-
-        df_merged['DNR'] = pd.to_numeric(df_merged['DNR'], errors='coerce').fillna(0.0).clip(upper=Config.MAX_DNR)
-
-        df_merged = df_merged.drop_duplicates(subset='ID', keep='first')
-
-        results = df_merged.apply(
-            lambda x: calculate_score_pdf_mode(x, targets=targets), axis=1, result_type='expand'
-        )
-        df_merged['CALIFICACION'] = results[0]
-        df_merged['DETALLES']     = results[1]
-        df_merged['SCORE']        = results[2]
-
-        def _enrich_detalles(row):
-            base  = str(row.get('DETALLES', ''))
-            dsc   = int(safe_number(row.get('FS_Count', 0), 0))
-            lor   = int(safe_number(row.get('DNR_RISK_EVENTS', 0), 0))
-            cdf_d = int((1.0 - min(max(safe_number(row.get('CDF', 1.0), 1.0), 0.0), 1.0)) * 1_000_000)
-            ce    = int(safe_number(row.get('CE', 0), 0))
-            suffix = f" | DSC:{dsc} LoR:{lor} CDF:{cdf_d} CE={ce}"
-            return (base + suffix) if base != 'Óptimo' else 'Óptimo' + suffix
-
-        df_merged['DETALLES'] = df_merged.apply(_enrich_detalles, axis=1)
-
-        matched = df_merged['DCR'].notna().sum()
-        logger.info(f"✅ PDF+Concessions: {len(df_merged)} conductores ({matched} con datos PDF)")
-        return df_merged
-
-    except Exception as exc:
-        logger.error(f"Error en process_from_pdf_and_concessions: {exc}")
         import traceback
         traceback.print_exc()
         return None
@@ -2245,23 +2031,23 @@ def reset_production_database(db_config: Optional[Dict] = None):
 @functools.lru_cache(maxsize=128)
 def week_to_date(week_str: str, year: int = None) -> str:
     """Convierte un string de semana 'W05' a la fecha del lunes de esa semana"""
-    _fallback_year = year or datetime.now().year
-    _fallback_date = f"{_fallback_year}-01-06"
     try:
         if not week_str or week_str == "N/A":
-            return _fallback_date
-
+            return "2025-01-06"
+        
         # Extraer número de semana
         match = re.search(r'(\d+)', week_str)
         if not match:
-            return _fallback_date
+            return "2025-01-06"
             
         week_num = int(match.group(1))
 
         if year is None:
-            year = datetime.now().year
+            year = 2025
             if week_num > 45:
                 year -= 1
+            elif week_num < 8:
+                pass
 
         # Cálculo ISO: 4 de enero es siempre semana 1
         d = datetime(year, 1, 4)
@@ -2269,7 +2055,7 @@ def week_to_date(week_str: str, year: int = None) -> str:
         start_date = d - timedelta(days=d.weekday()) + timedelta(weeks=week_num-1)
         return start_date.strftime("%Y-%m-%d")
     except (ValueError, TypeError, AttributeError):
-        return _fallback_date
+        return "2025-01-06"
 
 def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Optional[Dict] = None,
                      uploaded_by: str = "System", clean_first: bool = True,
@@ -2283,23 +2069,18 @@ def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Option
             except ValueError:
                 pass
 
+        if clean_first:
+            delete_scorecard_batch(week, center, db_config, year=year, preserve_pdf=True)
+
         is_postgres = db_config and db_config.get('type') == 'postgresql'
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         date_week = week_to_date(week, year=year)
 
-        base_cols = [
+        cols = [
             "semana", "fecha_semana", "anio", "centro", "driver_id", "driver_name", "calificacion", "score",
             "entregados", "dnr", "fs_count", "dnr_risk_events", "dcr", "pod", "cc",
             "fdps", "rts", "cdf", "detalles", "uploaded_by", "timestamp"
         ]
-
-        PDF_OPTIONAL_COLS = [
-            "entregados_oficial", "dcr_oficial", "pod_oficial", "cc_oficial",
-            "dsc_dpmo", "lor_dpmo", "ce_dpmo", "cdf_dpmo_oficial", "pdf_loaded",
-        ]
-        has_pdf_cols = any(c in df.columns for c in PDF_OPTIONAL_COLS)
-        pdf_cols_present = [c for c in PDF_OPTIONAL_COLS if c in df.columns] if has_pdf_cols else []
-        cols = base_cols + pdf_cols_present
 
         placeholder = "%s" if is_postgres else "?"
         placeholders = ", ".join([placeholder] * len(cols))
@@ -2308,26 +2089,10 @@ def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Option
             try: return float(v) if v is not None and str(v) not in ('nan','None','') else default
             except (ValueError, TypeError): return default
 
-        def _safe_int(v, default=None):
-            try: return int(v) if v is not None and str(v) not in ('nan','None','') else default
-            except (ValueError, TypeError): return default
-
         year_int = int(date_week[:4]) if date_week else None
 
-        if clean_first:
-            delete_scorecard_batch(week, center, db_config, year=year_int)
-
-        def _row_pdf_vals(row):
-            vals = []
-            for c in pdf_cols_present:
-                if c == 'pdf_loaded':
-                    vals.append(_safe_int(row.get(c), 0))
-                else:
-                    vals.append(_safe_float(row.get(c)))
-            return vals
-
         all_vals = [
-            tuple([
+            (
                 week, date_week, year_int, center,
                 str(row['ID']), str(row['Nombre']),
                 str(row['CALIFICACION']), _safe_float(row['SCORE']),
@@ -2337,16 +2102,9 @@ def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Option
                 _safe_float(row['CC']), _safe_float(row['FDPS']),
                 _safe_float(row['RTS']), _safe_float(row['CDF']),
                 str(row['DETALLES']), uploaded_by, ts
-            ] + _row_pdf_vals(row))
+            )
             for _, row in df.iterrows()
         ]
-
-        pdf_update_set = ""
-        if pdf_cols_present:
-            pdf_update_set = "\n" + "\n".join(
-                f"                        {c:<20} = EXCLUDED.{c},"
-                for c in pdf_cols_present
-            )
 
         with db_connection(db_config) as conn:
             cursor = conn.cursor()
@@ -2358,26 +2116,90 @@ def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Option
                     DO UPDATE SET
                         fecha_semana    = EXCLUDED.fecha_semana,
                         anio            = EXCLUDED.anio,
+                        driver_name     = CASE
+                                            WHEN EXCLUDED.driver_name != ''
+                                             AND EXCLUDED.driver_name != EXCLUDED.driver_id
+                                            THEN EXCLUDED.driver_name
+                                            ELSE scorecards.driver_name
+                                          END,
                         calificacion    = EXCLUDED.calificacion,
                         score           = EXCLUDED.score,
-                        entregados      = EXCLUDED.entregados,
+                        entregados      = CASE WHEN EXCLUDED.entregados > 0
+                                               THEN EXCLUDED.entregados
+                                               ELSE scorecards.entregados END,
                         dnr             = EXCLUDED.dnr,
                         fs_count        = EXCLUDED.fs_count,
                         dnr_risk_events = EXCLUDED.dnr_risk_events,
-                        dcr             = EXCLUDED.dcr,
-                        pod             = EXCLUDED.pod,
-                        cc              = EXCLUDED.cc,
+                        dcr             = CASE WHEN scorecards.pdf_loaded = 1
+                                               THEN scorecards.dcr
+                                               ELSE EXCLUDED.dcr END,
+                        pod             = CASE WHEN scorecards.pdf_loaded = 1
+                                               THEN scorecards.pod
+                                               ELSE EXCLUDED.pod END,
+                        cc              = CASE WHEN scorecards.pdf_loaded = 1
+                                               THEN scorecards.cc
+                                               ELSE EXCLUDED.cc  END,
                         fdps            = EXCLUDED.fdps,
                         rts             = EXCLUDED.rts,
-                        cdf             = EXCLUDED.cdf,
+                        cdf             = CASE WHEN scorecards.pdf_loaded = 1
+                                               THEN scorecards.cdf
+                                               ELSE EXCLUDED.cdf END,
                         detalles        = EXCLUDED.detalles,
                         uploaded_by     = EXCLUDED.uploaded_by,
-                        timestamp       = EXCLUDED.timestamp{pdf_update_set}
+                        timestamp       = EXCLUDED.timestamp
                 """
                 cursor.executemany(query, all_vals)
             else:
-                query = f"INSERT OR REPLACE INTO scorecards ({', '.join(cols)}) VALUES ({placeholders})"
+                # SQLite 3.24+: ON CONFLICT DO UPDATE (misma lógica que PostgreSQL)
+                # En SQLite, la fila existente se referencia sin prefijo de tabla.
+                query = f"""
+                    INSERT INTO scorecards ({', '.join(cols)}) VALUES ({placeholders})
+                    ON CONFLICT (semana, centro, anio, driver_id) DO UPDATE SET
+                        fecha_semana    = excluded.fecha_semana,
+                        anio            = excluded.anio,
+                        driver_name     = CASE
+                                            WHEN excluded.driver_name != ''
+                                             AND excluded.driver_name != excluded.driver_id
+                                            THEN excluded.driver_name
+                                            ELSE driver_name
+                                          END,
+                        calificacion    = excluded.calificacion,
+                        score           = excluded.score,
+                        entregados      = CASE WHEN excluded.entregados > 0
+                                               THEN excluded.entregados
+                                               ELSE entregados END,
+                        dnr             = excluded.dnr,
+                        fs_count        = excluded.fs_count,
+                        dnr_risk_events = excluded.dnr_risk_events,
+                        dcr             = CASE WHEN pdf_loaded = 1 THEN dcr ELSE excluded.dcr END,
+                        pod             = CASE WHEN pdf_loaded = 1 THEN pod ELSE excluded.pod END,
+                        cc              = CASE WHEN pdf_loaded = 1 THEN cc  ELSE excluded.cc  END,
+                        fdps            = excluded.fdps,
+                        rts             = excluded.rts,
+                        cdf             = CASE WHEN pdf_loaded = 1 THEN cdf ELSE excluded.cdf END,
+                        detalles        = excluded.detalles,
+                        uploaded_by     = excluded.uploaded_by,
+                        timestamp       = excluded.timestamp
+                """
                 cursor.executemany(query, all_vals)
+            # Recalcular scores para filas con pdf_loaded=1 (escenario PDF→CSV):
+            # el UPSERT preservó dcr/pod/cc del PDF pero sobreescribió el score con
+            # el valor provisional del CSV (calculado con dcr=1.0). Ahora recalculamos
+            # usando los valores reales de la DB (dcr real + dnr/rts ya mergeados).
+            if year_int:
+                cursor.execute(
+                    f"SELECT driver_id FROM scorecards "
+                    f"WHERE semana={placeholder} AND centro={placeholder} "
+                    f"AND anio={placeholder} AND pdf_loaded=1",
+                    (week, center, year_int)
+                )
+                pdf_ids = [r[0] for r in cursor.fetchall()]
+                if pdf_ids:
+                    n_recalc = _recalculate_scores_for_ids(
+                        cursor, placeholder, week, center, year_int, pdf_ids
+                    )
+                    if n_recalc:
+                        logger.info(f"✓ save_to_database: {n_recalc} scores recalculados para filas PDF+CSV")
             conn.commit()
 
         logger.info(f"✅ {len(df)} registros sincronizados con DB ({'PostgreSQL' if is_postgres else 'SQLite'})")
@@ -2873,8 +2695,8 @@ def parse_dsp_scorecard_pdf(pdf_bytes: bytes) -> dict:
                     break
             
             if not year:
-                year = datetime.now().year
-
+                year = 2025
+            
             if not centro:
                 result['errors'].append("No se detectó el centro en el PDF")
                 return result
@@ -2949,7 +2771,7 @@ def save_station_scorecard(station_data: dict, week: str, center: str,
             'uploaded_by',
         ]
 
-        anio_ss = int(fecha[:4]) if fecha else (year or datetime.now().year)
+        anio_ss = int(fecha[:4]) if fecha else (year or 2025)
 
         vals = [
             week, fecha, anio_ss, center,
@@ -3005,16 +2827,60 @@ def save_station_scorecard(station_data: dict, week: str, center: str,
         return False, str(e)
 
 
+def _recalculate_scores_for_ids(cursor, ph: str, week: str, center: str,
+                                year: int, driver_ids: list) -> int:
+    """
+    Re-calcula score/calificacion/detalles para un conjunto de driver_ids usando
+    los valores actuales de la DB (dcr/pod/cc del PDF + dnr/rts del CSV).
+    Se llama dentro de una transacción abierta (cursor ya activo).
+    Devuelve el número de filas actualizadas.
+    """
+    if not driver_ids:
+        return 0
+    phs_ids = ", ".join([ph] * len(driver_ids))
+    cursor.execute(
+        f"SELECT driver_id, dnr, fs_count, dnr_risk_events, dcr, pod, cc, fdps, rts, cdf "
+        f"FROM scorecards "
+        f"WHERE semana={ph} AND centro={ph} AND anio={ph} AND driver_id IN ({phs_ids})",
+        [week, center, year] + list(driver_ids)
+    )
+    rows = cursor.fetchall()
+    score_updates = []
+    for r in rows:
+        did, dnr, fs_cnt, dnr_risk, dcr_r, pod_r, cc_r, fdps_r, rts_r, cdf_r = r
+        fake = pd.Series({
+            'DNR':             float(dnr      or 0),
+            'FS_Count':        float(fs_cnt   or 0),
+            'DNR_RISK_EVENTS': float(dnr_risk or 0),
+            'DCR':             float(dcr_r    or 1),
+            'POD':             float(pod_r    or 1),
+            'CC':              float(cc_r     or 1),
+            'FDPS':            float(fdps_r   or 1),
+            'RTS':             float(rts_r    or 0),
+            'CDF':             float(cdf_r    or 1),
+        })
+        calificacion, detalles, score_val = calculate_score_v3_robust(fake)
+        score_updates.append((calificacion, float(score_val), detalles,
+                               week, center, year, did))
+    if score_updates:
+        cursor.executemany(
+            f"UPDATE scorecards SET calificacion={ph}, score={ph}, detalles={ph} "
+            f"WHERE semana={ph} AND centro={ph} AND anio={ph} AND driver_id={ph}",
+            score_updates
+        )
+    return len(score_updates)
+
+
 def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
                              db_config=None, year: Optional[int] = None) -> Tuple[int, int]:
     """
-    Actualiza SOLO las columnas _oficial en scorecards con los valores del PDF.
-    
+    Actualiza las columnas _oficial y las columnas principales (dcr, pod, cc, entregados)
+    en scorecards con los valores del PDF, y recalcula el score combinado (PDF+CSV).
+
     - NO elimina filas existentes
-    - NO crea filas nuevas
-    - NO toca columnas base (dnr, dcr, pod, etc.)
-    - Las columnas _oficial solo se rellenan aquí
-    
+    - Para drivers ya existentes: actualiza _oficial + dcr/pod/cc + recalcula score
+    - Para drivers nuevos (PDF subido antes del CSV): inserta fila seed con pdf_loaded=1
+
     Returns: (n_actualizados, n_no_encontrados)
     """
     if drivers_df is None or drivers_df.empty:
@@ -3031,7 +2897,7 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
             phs = ", ".join([ph] * len(all_ids))
             
             if year is None:
-                year = datetime.now().year
+                year = 2025
 
             cursor.execute(
                 f"SELECT driver_id FROM scorecards "
@@ -3049,6 +2915,9 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
                     row.get('pod_oficial'),        row.get('cc_oficial'),
                     row.get('dsc_dpmo'),           row.get('lor_dpmo'),
                     row.get('ce_dpmo'),            row.get('cdf_dpmo_oficial'),
+                    # columnas principales: los valores reales del PDF sobreescriben los defaults del CSV
+                    row.get('dcr_oficial'), row.get('pod_oficial'), row.get('cc_oficial'),
+                    row.get('entregados_oficial'), row.get('entregados_oficial'),  # CASE WHEN ? > 0 THEN ?
                     week, center, year, str(row['driver_id'])
                 )
                 for _, row in drivers_df.iterrows()
@@ -3066,18 +2935,98 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
                         lor_dpmo           = {ph},
                         ce_dpmo            = {ph},
                         cdf_dpmo_oficial   = {ph},
+                        dcr                = {ph},
+                        pod                = {ph},
+                        cc                 = {ph},
+                        entregados         = CASE WHEN {ph} > 0 THEN {ph} ELSE entregados END,
                         pdf_loaded         = 1
                     WHERE semana={ph} AND centro={ph} AND anio={ph} AND driver_id={ph}
                 """
                 cursor.executemany(q_update, update_vals)
                 updated = len(update_vals)
+                # Recalcular score: ahora dcr/pod/cc son reales (PDF) y dnr/rts son reales (CSV)
+                n_recalc = _recalculate_scores_for_ids(
+                    cursor, ph, week, center, year, list(existing_ids)
+                )
+                if n_recalc:
+                    logger.info(f"✓ update_drivers_from_pdf: {n_recalc} scores recalculados con datos combinados PDF+CSV")
             else:
                 updated = 0
+
+            # ── INSERT filas para drivers del PDF sin registro en scorecards ────────
+            # Ocurre cuando el PDF se sube ANTES que el CSV de Concessions.
+            # Se crea una fila con las métricas oficiales del PDF en las columnas
+            # principales (dcr, pod, cc) y pdf_loaded=1.
+            # El CSV de Concessions rellenará driver_name, dnr y rts después.
+            if not_found:
+                fecha_ins = week_to_date(week, year=year)
+                anio_ins  = year if year else (int(fecha_ins[:4]) if fecha_ins else 2025)
+                ts_ins    = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                ins_cols = [
+                    "semana", "fecha_semana", "anio", "centro", "driver_id", "driver_name",
+                    "calificacion", "score",
+                    "entregados", "dnr", "fs_count", "dnr_risk_events",
+                    "dcr", "pod", "cc", "fdps", "rts", "cdf",
+                    "detalles", "uploaded_by", "timestamp",
+                    "entregados_oficial", "dcr_oficial", "pod_oficial", "cc_oficial",
+                    "dsc_dpmo", "lor_dpmo", "ce_dpmo", "cdf_dpmo_oficial", "pdf_loaded",
+                ]
+                phs_ins = ', '.join([ph] * len(ins_cols))
+                col_ins = ', '.join(ins_cols)
+
+                not_found_set = set(not_found)
+                insert_vals   = []
+                for _, row in drivers_df.iterrows():
+                    did = str(row['driver_id'])
+                    if did not in not_found_set:
+                        continue
+
+                    dcr_v = float(row.get('dcr_oficial') or 1.0)
+                    pod_v = float(row.get('pod_oficial') or 1.0)
+                    cc_v  = float(row.get('cc_oficial')  or 1.0)
+                    ent_v = float(row.get('entregados_oficial') or 0.0)
+
+                    # Calcular score provisional con los datos del PDF (sin DNR/RTS aún)
+                    fake = pd.Series({
+                        'DNR': 0.0, 'FS_Count': 0.0, 'DNR_RISK_EVENTS': 0.0,
+                        'DCR': dcr_v, 'POD': pod_v, 'CC': cc_v,
+                        'FDPS': 1.0, 'RTS': 0.0, 'CDF': 1.0,
+                    })
+                    calificacion, detalles, score = calculate_score_v3_robust(fake)
+
+                    insert_vals.append((
+                        week, fecha_ins, anio_ins, center,
+                        did, '',            # driver_name: vacío, el CSV lo rellenará
+                        calificacion, float(score),
+                        ent_v, 0.0, 0.0, 0.0,          # dnr, fs_count, dnr_risk_events = 0
+                        dcr_v, pod_v, cc_v, 1.0, 0.0, 1.0,  # dcr, pod, cc, fdps, rts, cdf
+                        detalles, 'PDF', ts_ins,
+                        # columnas _oficial
+                        ent_v, dcr_v, pod_v, cc_v,
+                        float(row.get('dsc_dpmo') or 0.0),
+                        float(row.get('lor_dpmo') or 0.0),
+                        float(row.get('ce_dpmo')  or 0.0),
+                        float(row.get('cdf_dpmo_oficial') or 0.0),
+                        1,  # pdf_loaded
+                    ))
+
+                if insert_vals:
+                    if is_pg:
+                        q_ins = f"""
+                            INSERT INTO scorecards ({col_ins}) VALUES ({phs_ins})
+                            ON CONFLICT (semana, centro, anio, driver_id) DO NOTHING
+                        """
+                    else:
+                        q_ins = f"INSERT OR IGNORE INTO scorecards ({col_ins}) VALUES ({phs_ins})"
+                    cursor.executemany(q_ins, insert_vals)
+                    logger.info(f"✓ update_drivers_from_pdf: {len(insert_vals)} nuevas filas insertadas desde PDF")
 
             conn.commit()
 
         if not_found:
-            logger.warning(f"Drivers del PDF sin match ({len(not_found)}): {not_found[:5]}{'...' if len(not_found) > 5 else ''}")
+            logger.warning(f"Drivers del PDF sin match en scorecards ({len(not_found)}): "
+                           f"{not_found[:5]}{'...' if len(not_found) > 5 else ''} — filas insertadas desde PDF")
         logger.info(f"✓ update_drivers_from_pdf: {updated} actualizados, {len(not_found)} sin match")
         return updated, len(not_found)
 
@@ -3107,7 +3056,7 @@ def save_wh_exceptions(wh_df: pd.DataFrame, week: str, center: str,
             ph     = '%s' if is_pg else '?'
             fecha  = week_to_date(week, year=year)
 
-            anio_wh = int(fecha[:4]) if fecha else (year or datetime.now().year)
+            anio_wh = int(fecha[:4]) if fecha else (year or 2025)
 
             # ── Lookup driver_name desde scorecards (misma semana, centro y año) ──
             driver_ids = wh_df['driver_id'].astype(str).tolist()
