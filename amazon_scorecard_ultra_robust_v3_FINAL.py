@@ -2292,17 +2292,29 @@ def refresh_center_views(db_config=None) -> int:
     try:
         with db_connection(db_config) as conn:
             cursor = conn.cursor()
+
+            # Eliminar vistas antiguas con prefijo v_scorecard_
+            cursor.execute("""
+                SELECT table_name FROM information_schema.views
+                WHERE table_schema = 'public'
+                  AND table_name LIKE 'v_scorecard_%'
+            """)
+            old_views = [r[0] for r in cursor.fetchall()]
+            for old_view in old_views:
+                cursor.execute(f'DROP VIEW IF EXISTS {old_view}')
+
+            # Crear vistas nuevas con nombre DAS_{CENTRO}
             cursor.execute("SELECT DISTINCT centro FROM scorecards")
             centros = [r[0] for r in cursor.fetchall()]
             for c in centros:
-                clean_name = "".join(ch if ch.isalnum() else "_" for ch in c.lower())[:50]
-                view_name  = f"v_scorecard_{clean_name}"
+                clean_name = "".join(ch if ch.isalnum() else "_" for ch in c.upper())[:50]
+                view_name  = f"DAS_{clean_name}"
                 cursor.execute(
                     f'CREATE OR REPLACE VIEW {view_name} AS '
                     f'SELECT * FROM scorecards WHERE centro = %s', (c,)
                 )
             conn.commit()
-        logger.info(f"refresh_center_views: {len(centros)} vistas actualizadas")
+        logger.info(f"refresh_center_views: {len(centros)} vistas actualizadas (DAS_{{CENTRO}})")
         return len(centros)
     except Exception as e:
         logger.warning(f"refresh_center_views error: {e}")
