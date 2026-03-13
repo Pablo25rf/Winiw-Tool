@@ -1123,9 +1123,14 @@ if tab_dash:
                 )
                 delta_score = None
                 if row.score_prev is not None:
-                    delta_score = round(row.score_medio - row.score_prev, 1)
+                    try:
+                        diff = round(float(row.score_medio) - float(row.score_prev), 1)
+                        if not (diff != diff):  # NaN check
+                            delta_score = diff
+                    except (TypeError, ValueError):
+                        pass
 
-                delta_cell = ''
+                delta_cell = '<span style="color:#6c757d">—</span>'
                 if delta_score is not None:
                     dc = '#198754' if delta_score >= 0 else '#dc3545'
                     di = '▲' if delta_score > 0 else ('▼' if delta_score < 0 else '→')
