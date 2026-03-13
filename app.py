@@ -1206,37 +1206,32 @@ if tab_dash:
                     domain=['Fantastic', 'Great', 'Fair', 'Poor'],
                     range=['#0d6efd', '#198754', '#fd7e14', '#dc3545']
                 )
-                # Ordenar igual que la tabla: score descendente
-                _sort_order = df_chart.sort_values('score_medio', ascending=False)['centro'].tolist()
-                _bar_size = min(60, max(20, 400 // max(1, len(df_chart))))
-                # Nombre del centro como texto dentro de la barra (evita recorte del eje X)
-                df_chart['y_lbl'] = _y_min
+                # Barras horizontales — centro en eje Y (siempre visible, sin recorte)
+                _sort_order = df_chart.sort_values('score_medio', ascending=True)['centro'].tolist()
+                _bar_h = min(50, max(22, 300 // max(1, len(df_chart))))
+                _x_max = min(100, float(df_chart['score_medio'].max()) + 8)
                 _bars = (alt.Chart(df_chart)
-                    .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6, size=_bar_size)
+                    .mark_bar(cornerRadiusTopRight=6, cornerRadiusBottomRight=6, size=_bar_h)
                     .encode(
-                        x=alt.X('centro:N',
-                                sort=_sort_order,
-                                axis=alt.Axis(labels=False, ticks=False, title=None)),
-                        y=alt.Y('score_medio:Q', scale=alt.Scale(domain=[_y_min, _y_max]),
-                                axis=alt.Axis(labelColor='white', titleColor='white'),
+                        y=alt.Y('centro:N', sort=_sort_order,
+                                axis=alt.Axis(labelColor='white', labelFontSize=13,
+                                              labelFontWeight='bold', titleColor='white',
+                                              tickColor='white', title=None)),
+                        x=alt.X('score_medio:Q', scale=alt.Scale(domain=[0, _x_max]),
+                                axis=alt.Axis(labelColor='white', titleColor='white',
+                                              grid=True, gridColor='#333'),
                                 title='Score'),
                         color=alt.Color('tier:N', scale=_color_scale, legend=None),
                         tooltip=[alt.Tooltip('centro:N', title='Centro'),
                                  alt.Tooltip('score_medio:Q', title='Score', format='.1f'),
                                  alt.Tooltip('tier:N', title='Nivel')]
-                    ).properties(height=260))
+                    ).properties(height=max(220, len(df_chart) * 42)))
                 _text_score = (alt.Chart(df_chart)
-                    .mark_text(dy=-10, fontSize=13, fontWeight='bold', color='white')
-                    .encode(x=alt.X('centro:N', sort=_sort_order),
-                            y=alt.Y('score_medio:Q', scale=alt.Scale(domain=[_y_min, _y_max])),
+                    .mark_text(align='left', dx=6, fontSize=13, fontWeight='bold', color='white')
+                    .encode(y=alt.Y('centro:N', sort=_sort_order),
+                            x=alt.X('score_medio:Q', scale=alt.Scale(domain=[0, _x_max])),
                             text=alt.Text('label:N')))
-                _text_centro = (alt.Chart(df_chart)
-                    .mark_text(align='center', baseline='top', fontSize=12,
-                               fontWeight='bold', color='white', dy=6)
-                    .encode(x=alt.X('centro:N', sort=_sort_order),
-                            y=alt.Y('y_lbl:Q', scale=alt.Scale(domain=[_y_min, _y_max])),
-                            text=alt.Text('centro:N')))
-                st.altair_chart(_bars + _text_score + _text_centro, use_container_width=True)
+                st.altair_chart(_bars + _text_score, use_container_width=True)
 
             # ── Distribución global POOR ───────────────────────────────────
             if df_exec['n_poor'].sum() > 0:
