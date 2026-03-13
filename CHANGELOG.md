@@ -7,58 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.9.3] - 2026-03-13
+
+### Fixed
+
+- **Score Medio por Centro — etiquetas cortadas**: `_y_max` aumentado de `max+8` a `max+15` (cap 105) para que las etiquetas de texto no queden recortadas en el borde superior del gráfico con scores altos
+- **Credencial hardcodeada en tests**: `test_scorecard_v39.py` ya no usa contraseña hardcodeada; lanza `EnvironmentError` si no hay variable de entorno configurada
+
+---
+
+## [3.9.2] - 2026-03-13
+
+### Fixed — Bugs críticos de visualización
+
+- **Gráficos Altair vacíos (barras invisibles)**: PostgreSQL devuelve tipos `Decimal`; Altair no los renderiza. Aplicado `pd.to_numeric(..., errors='coerce')` en Score Medio, Tendencia Semanal y Conductores POOR
+- **Tendencia Semanal siempre vacía**: `GROUP BY semana ORDER BY fecha_semana` es inválido en PostgreSQL estricto cuando `fecha_semana` no está en el GROUP BY. Corregido con `MIN(fecha_semana) AS fecha_semana` en el SELECT y `ORDER BY MIN(fecha_semana)`
+- **Histórico vacío**: `SELECT DISTINCT ... ORDER BY fecha_semana` con `fecha_semana` no seleccionada. Corregido con `ORDER BY semana DESC`
+- **"Métricas Comparativas" mostraba HTML crudo**: `st.markdown(unsafe_allow_html=True)` no renderiza tablas HTML complejas en Streamlit ≥1.32. Cambiado a `st.html()`
+- **"+nan" en columna "vs Ant."**: añadido check `math.isnan()` para mostrar "—" cuando no hay dato previo
+- **Botón "Actualizar datos" en Histórico**: añadido `st.cache_data.clear()` para invalidar caché manualmente
+
+### Changed
+
+- **Tabs renombradas**: reflejan su función real — "Subir Archivos", "Subir PDFs", "Ver Conductores"
+- **Headers simplificados**: "Resumen de Centros", "Subir Archivos", "PDFs Semanales"
+- **Captions explicativos** añadidos en todos los gráficos del dashboard
+- **max_chars=100/128** en campos de login para evitar payloads excesivos
+
+### Added
+
+- **Botón "🔄 Actualizar datos"** en pestaña Histórico para forzar refresco de caché
+
+---
+
+## [3.9.1] - 2026-03-12
+
+### Fixed
+
+- **Columna `anio` faltante en Supabase**: `ALTER TABLE station_scorecards ADD COLUMN IF NOT EXISTS anio INTEGER` + actualización del UNIQUE constraint para incluir `anio`
+- **UNIQUE constraint sin `anio`**: `ON CONFLICT` fallaba en `station_scorecards` y `wh_exceptions` al existir constraints sin la nueva columna. Recreados constraints con `anio` incluido
+- **Rama incorrecta en Streamlit Cloud**: Streamlit Cloud lee `main`, los pushes iban a `master`. Sincronizadas las ramas: `git merge master && git push origin main`
+
+### Added
+
+- Índice `(centro, timestamp DESC)` en `scorecards` para mejorar queries del dashboard ejecutivo
+
+---
+
 ## [3.9.0] - 2026-03-04
 
 ### Fixed — Críticos (seguridad y corrupción silenciosa)
 
-- **Credenciales hardcodeadas eliminadas** — usuario `pablo` y contraseña `Admin_Winiw_2026` retirados del código fuente; bootstrap superadmin ahora lee exclusivamente de `WINIW_ADMIN_USER` y `WINIW_ADMIN_PASS`
+- **Credenciales hardcodeadas eliminadas** — usuario y contraseña superadmin retirados del código fuente; bootstrap ahora lee exclusivamente de variables de entorno
 - **Código huérfano en import** — `success = main(); sys.exit(...)` ejecutaba en cada import; protegido con `if __name__ == "__main__"`
 - **SQL Injection en vistas** — `CREATE VIEW ... WHERE centro = '{c}'` reemplazado por `psycopg2.sql.SQL` con `Identifier` y `Literal`
 - **`logging.basicConfig()` doble** — eliminado del motor; centralizado en `app.py` antes del import del módulo
 
 ### Fixed — Altos (rendimiento y lógica)
 
-- **`iterrows()` en escrituras BD** — `save_to_database`, `update_drivers_from_pdf`, `save_wh_exceptions`: N queries individuales → `execute_values` (PostgreSQL) / `executemany` (SQLite); 10-50× más rápido en lotes de 200 drivers
+- **`iterrows()` en escrituras BD** — `save_to_database`, `update_drivers_from_pdf`, `save_wh_exceptions`: N queries individuales → `execute_values` / `executemany`; 10-50× más rápido en lotes grandes
 - **N+1 en `cached_executive_summary`** — 1 + 3×N queries → 2 queries constantes con `ROW_NUMBER() OVER PARTITION`
-- **`session_state` desincronizado** — selector de semana/centro actualizaba variables locales sin sincronizar `st.session_state`; añadido sync explícito al detectar cambio
-- **Trend con 1 punto** — `if df_trend.empty or len(df_trend) < 1` era doble vacío; separado en dos condiciones con mensajes distintos
-- **Comparación lexicográfica de semanas** — `WHERE semana < 'W07'` reemplazado por `ORDER BY MAX(timestamp) DESC LIMIT 1` para histórico correcto
-- **`init_database()` redundante** — eliminadas llamadas desde `get_center_targets()` y `save_station_scorecard()`; añadido `try/finally` en ambas
-- **Rate limiting en memoria** — dict `_LOGIN_ATTEMPTS` perdido en reinicios, invisible entre workers; migrado a tabla `login_attempts` en BD (durable, multi-worker)
-- **`get_user_role()` sin filtro `active`** — usuarios desactivados podían ser reconocidos como superadmin en checks de permisos; añadido `AND active = 1`
+- **`session_state` desincronizado** — selector de semana/centro actualizaba variables locales sin sincronizar `st.session_state`
+- **Comparación lexicográfica de semanas** — `WHERE semana < 'W07'` reemplazado por `ORDER BY MAX(timestamp) DESC LIMIT 1`
+- **Rate limiting en memoria** — dict perdido en reinicios; migrado a tabla `login_attempts` en BD (durable, multi-worker)
+- **`get_user_role()` sin filtro `active`** — usuarios desactivados podían ser reconocidos como superadmin
 
-### Fixed — Medios (calidad de código)
+### Added — Nuevas funcionalidades
 
-- **`locals()` antipattern** — `risk_group` inicializado a `None` antes del bloque condicional; comprobación `if risk_group is not None`
-- **`import io` duplicado** — segunda aparición eliminada del cuerpo del módulo
-- **Caché sidebar sin TTL** — 3 queries raw en cada re-render del sidebar → `cached_db_status()` con TTL=60s
-- **Bare `except:` silenciosos** — todos convertidos a `except Exception as e: logger.debug(...)` en `read_excel_safe`, parser de fechas de nombre de archivo, `week_to_date`, `clean_database_duplicates`
-- **`whc_pct` / `whc_tier` duplicados** — segunda aparición eliminada del `SELECT` de `get_station_scorecards`
-- **`_LOGIN_ATTEMPTS` referencia huérfana** — bloque de feedback de login ahora lee el contador actualizado desde BD via `_rate_limit_row()`
-- **18 llamadas `.clear()` individuales** — consolidadas en `_clear_all_caches()` que llama a `st.cache_data.clear()`
-
-### Fixed — Bajos (calidad y consistencia)
-
-- **Versión desincronizada** — docstring y `__version__` actualizados a `v3.9`
-- **`st.stop()` en handler de borrar usuario** — reemplazado por `target_role = None` para no detener el render completo
-- **Triple `drop_duplicates()`** — dos comprobaciones redundantes post-`process_concessions` eliminadas; guardián único al final del merge
-- **`df_sorted` re-sorteado** — `top_10` y `bottom_10` extraídos con `.head()` / `.tail()` sin volver a ordenar
-- **Convención de idioma** — documentada en docstring: Español para UI y logs, Inglés para nombres de funciones/variables (PEP8)
-
-### Added — Nuevas funcionalidades v3.9
-
-- **Columna `anio`** en `scorecards` y `wh_exceptions` — extraída automáticamente de la semana al guardar; útil para filtros de Power BI sin parsear strings
-- **`driver_name` en `wh_exceptions`** — lookup automático desde `scorecards` al guardar excepciones WHC; `NULL` si el driver no tiene datos CSV
-- **`wh_count` en `get_station_scorecards`** — LEFT JOIN a `wh_exceptions` agrupado; sin query adicional
-- **Bug PDF corregido** — drivers en páginas `[2, 3]` (no `[2, 3, 4]`); WHC en `pages[4]` (no `pages[5]`); evita incluir filas WHC como drivers
-- **API pública del motor**: `check_login_locked()`, `record_login_attempt()`, `run_maintenance()`, `update_user_password()`, `get_user_centro()`, `set_user_centro()`
-- **`get_db_connection()` respeta `db_config['path']`** — permite tests con BD temporal sin tocar la BD de producción
-- **Migración automática para BDs existentes** — `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` para `anio` (scorecards), `driver_name` y `anio` (wh_exceptions), `centro` (users)
+- **Columna `anio`** en `scorecards` y `wh_exceptions` — extraída automáticamente al guardar
+- **`driver_name` en `wh_exceptions`** — lookup automático desde `scorecards`
+- **`wh_count` en `get_station_scorecards`** — LEFT JOIN a `wh_exceptions` agrupado sin query adicional
+- **Migración automática** para BDs existentes v3.7/v3.8 — `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
+- **API pública del motor**: `check_login_locked()`, `record_login_attempt()`, `run_maintenance()`, etc.
 
 ### Tests
 
 - Suite actualizada a **159 tests** (0 fallos, 14 skipped requieren PDF real)
-- Nuevas clases: `TestSchemaV39`, `TestSaveToDatabaseV39`, `TestSaveWhExceptionsV39`, `TestStationScorecardWHCount`, `TestRegresionesV39`, `TestRateLimiting` completo
+- Nuevas clases: `TestSchemaV39`, `TestSaveToDatabaseV39`, `TestSaveWhExceptionsV39`, `TestStationScorecardWHCount`, `TestRegresionesV39`, `TestRateLimiting`
 
 ---
 
@@ -66,18 +91,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **C-01** Pool PostgreSQL: eliminado `conn.close()` dentro del context manager (`db_connection`)
-- **C-02** Pool PostgreSQL: eliminado doble `conn.close()` en `clean_database_duplicates`
-- **C-03** Autenticación: `locked_until` ahora usa comparación `datetime` real en lugar de comparación de strings
-- **C-04** Comparaciones de fecha: WoW y alertas usan columna `fecha_semana DATE` en lugar de `semana TEXT`
-- **C-05** Detección de archivos: DSC-Concessions separado de Concessions mediante lookahead negativo en regex
-- **C-06** Pool PostgreSQL: `init_database` ahora usa `putconn()` en lugar de `close()`
+- Pool PostgreSQL: eliminado `conn.close()` dentro del context manager
+- Autenticación: `locked_until` usa comparación `datetime` real en lugar de comparación de strings
+- Comparaciones de fecha: WoW y alertas usan columna `fecha_semana DATE` en lugar de `semana TEXT`
+- Detección de archivos: DSC-Concessions separado de Concessions mediante lookahead negativo en regex
 
 ### Added
 
-- `WINIW_ADMIN_USER` y `WINIW_ADMIN_PASS` como variables de entorno obligatorias
-- Normalización automática de semana `W5` → `W05` en `save_to_database`
-- Warning visible en sidebar cuando `bcrypt` no está instalado
+- Variables de entorno `WINIW_ADMIN_USER` y `WINIW_ADMIN_PASS` como obligatorias
+- Normalización automática de semana `W5` → `W05`
 - `Dockerfile` y `.dockerignore` para despliegue en contenedor
 - `.env.example` con plantilla de variables de entorno
 - CI con GitHub Actions (`tests.yml`)

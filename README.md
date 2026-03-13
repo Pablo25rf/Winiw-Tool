@@ -1,25 +1,25 @@
-# 🚛 Winiw Quality Scorecard v3.9
+# Winiw Quality Scorecard
 
-Sistema de gestión de calidad para Amazon DSP — procesa CSVs y PDFs semanales, calcula scores por conductor y genera scorecards automáticos con visualización en tiempo real.
+Herramienta de gestión de calidad para operaciones Amazon DSP. Procesa los datos semanales de los centros, calcula el score de cada conductor y genera scorecards automáticos con visualización en tiempo real.
 
 > **Autor:** [@pablo25rf](https://github.com/pablo25rf)
 
 ---
 
-## ✨ Funcionalidades
+## ¿Qué hace?
 
-- **Procesamiento automático** de 7 fuentes CSV/Excel + PDF DSP Scorecard
-- **Score ponderado** por conductor con 8 métricas (DNR, DCR, POD, CC, RTS, CDF, FDPS, FS)
-- **Calificaciones**: 💎 FANTASTIC · 🥇 GREAT · ⚠️ FAIR · 🛑 POOR
-- **Dashboard ejecutivo** con ranking de centros y tendencia semanal
-- **Histórico completo** con filtros avanzados y exportación Power BI
-- **Gestión de usuarios** con roles (Superadmin / Admin / JT) y rate limiting persistente
-- **Targets por centro** configurables desde la interfaz
-- **Base de datos dual**: PostgreSQL/Supabase (producción) o SQLite (desarrollo local)
-- **WHC count** por estación vía LEFT JOIN automático
-- **Columna `anio`** en scorecards y excepciones WHC para filtros rápidos
+- Procesa automáticamente los archivos semanales de Amazon DSP (CSVs de concesiones, calidad, excepciones WHC y el PDF de scorecard oficial)
+- Calcula un **score ponderado por conductor** con 8 métricas: DNR, DCR, POD, CC, RTS, CDF, FDPS y Fantásticos
+- Clasifica a cada conductor en cuatro niveles: 💎 FANTASTIC · 🥇 GREAT · ⚠️ FAIR · 🛑 POOR
+- Muestra un **dashboard ejecutivo** con ranking de centros, tendencia semanal y distribución de niveles
+- Mantiene un **histórico completo** filtrable y exportable
+- Gestiona **usuarios con roles** (Superadmin / Admin / JT) con control de acceso por centro
+- Permite configurar **targets de calidad** por centro desde la propia interfaz
+- Funciona con **PostgreSQL/Supabase** en producción o **SQLite local** en desarrollo sin configuración adicional
 
-## 🚀 Instalación rápida
+---
+
+## Instalación rápida
 
 ### Windows
 ```bat
@@ -42,41 +42,54 @@ source .venv/bin/activate
 
 pip install -r requirements.txt
 cp .env.example .env
-# Edita .env con tus credenciales
+# Edita .env con las credenciales de acceso
 streamlit run app.py
 ```
 
-## ⚙️ Configuración
+---
 
-### Variables de entorno (`.env`)
-```env
-WINIW_ADMIN_USER=admin
-WINIW_ADMIN_PASS=password_segura
-```
+## Configuración
 
-### Base de datos PostgreSQL/Supabase (opcional)
-Copia `.streamlit/secrets.toml.example` a `.streamlit/secrets.toml` y rellena las credenciales.
-Sin configuración PostgreSQL, la app usa **SQLite local** automáticamente.
+La app requiere dos variables de entorno para arrancar (credenciales del superadmin inicial). Se configuran en el archivo `.env` — ver `.env.example` como plantilla.
 
-## 🐳 Docker
+Para conectar con PostgreSQL/Supabase en producción, copia `.streamlit/secrets.toml.example` a `.streamlit/secrets.toml` y rellena las credenciales de la base de datos. Sin este archivo la app usa SQLite local automáticamente.
+
+---
+
+## Deploy en Streamlit Cloud
+
+1. Sube el código a GitHub (rama `main`)
+2. Conecta el repositorio en [share.streamlit.io](https://share.streamlit.io)
+3. Configura los Secrets con las credenciales de Supabase y de acceso
+4. Deploy — la app se actualiza automáticamente con cada push a `main`
+
+Ver [DEPLOY.md](DEPLOY.md) para instrucciones detalladas paso a paso.
+
+---
+
+## Docker
 
 ```bash
 docker build -t winiw-scorecard .
 docker run -p 8501:8501 --env-file .env winiw-scorecard
 ```
 
-## 👤 Roles de usuario
+---
 
-| Rol | Permisos |
-|-----|----------|
-| **Superadmin** | Todo — incluye gestión de usuarios y reset de BD |
-| **Admin** | Subir datos, ver scorecards de todos los centros |
-| **JT** | Solo ver el scorecard de su centro asignado |
+## Roles de usuario
 
-## 📁 Estructura del proyecto
+| Rol | Acceso |
+|-----|--------|
+| **Superadmin** | Gestión completa — usuarios, datos, configuración, base de datos |
+| **Admin** | Subir datos semanales, ver scorecards de todos los centros |
+| **JT** | Ver el scorecard de su centro asignado (semanas recientes) |
+
+---
+
+## Estructura del proyecto
 
 ```
-WINIW_TOOL/
+Winiw-Tool/
 ├── app.py                                    # Interfaz Streamlit
 ├── amazon_scorecard_ultra_robust_v3_FINAL.py # Motor de procesamiento
 ├── requirements.txt
@@ -84,20 +97,15 @@ WINIW_TOOL/
 ├── .streamlit/
 │   └── secrets.toml.example
 ├── Dockerfile
-├── .dockerignore
-├── .gitignore
 ├── instalar_windows.bat
 ├── instalar_linux_mac.sh
-├── test_scorecard_v39.py                     # Suite de tests (159 tests)
-└── docs/
-    ├── DEPLOY.md
-    ├── GUIA_SUPERADMIN.md
-    ├── MANUAL_OPERACION_DETALLADO.md
-    ├── DOCUMENTACION_TECNICA_IT.md
-    └── POWER_BI_GUIA_DEFINITIVA.md
+├── test_scorecard_v39.py                     # Suite de tests
+└── DEPLOY.md                                 # Guía de despliegue
 ```
 
-## 🧪 Tests
+---
+
+## Tests
 
 ```bash
 WINIW_ADMIN_USER=test WINIW_ADMIN_PASS=test python -m unittest test_scorecard_v39 -v
@@ -105,10 +113,12 @@ WINIW_ADMIN_USER=test WINIW_ADMIN_PASS=test python -m unittest test_scorecard_v3
 
 159 tests — 0 fallos. 14 skipped requieren el PDF real de DMA3.
 
-## 📋 Changelog
+---
+
+## Changelog
 
 Ver [CHANGELOG.md](CHANGELOG.md)
 
-## 📄 Licencia
+---
 
 © 2026 [@pablo25rf](https://github.com/pablo25rf) · Amazon DSP · Todos los derechos reservados.

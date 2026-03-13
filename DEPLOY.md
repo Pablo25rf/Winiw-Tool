@@ -1,4 +1,4 @@
-# Winiw Quality Scorecard — Guía de Deploy v3.9
+# Winiw Quality Scorecard — Guía de Deploy
 ## De cero a producción en Streamlit Cloud + Supabase
 
 > Autor: [@pablo25rf](https://github.com/pablo25rf)
@@ -8,8 +8,8 @@
 ## Requisitos previos
 
 - Cuenta en [Streamlit Cloud](https://streamlit.io/cloud) (gratuita)
-- Cuenta en [Supabase](https://supabase.com) (gratuita hasta 500MB)
-- Repositorio en GitHub: `github.com/pablo25rf/winiw` (o el nombre que uses)
+- Cuenta en [Supabase](https://supabase.com) (gratuita hasta 500 MB)
+- Repositorio en GitHub: `github.com/Pablo25rf/Winiw-Tool`
 - Python 3.10+ local para pruebas
 
 ---
@@ -17,164 +17,111 @@
 ## 1. Estructura de ficheros
 
 ```
-winiw/
+Winiw-Tool/
 ├── app.py                                        # Aplicación principal
-├── amazon_scorecard_ultra_robust_v3_FINAL.py     # Motor de procesamiento v3.9
+├── amazon_scorecard_ultra_robust_v3_FINAL.py     # Motor de procesamiento
 ├── requirements.txt                              # Dependencias Python
-├── .gitignore                                    # Excluye secrets y BD local
+├── .gitignore
 ├── .env.example                                  # Plantilla variables de entorno
-├── secrets_toml.example                          # Plantilla secrets.toml
-├── test_scorecard_v39.py                         # Suite de 159 tests
+├── .streamlit/
+│   └── secrets.toml.example                      # Plantilla secrets.toml
+├── test_scorecard_v39.py                         # Suite de tests
 ├── Dockerfile
-├── .dockerignore
 ├── instalar_windows.bat
-├── instalar_linux_mac.sh
-└── .streamlit/
-    └── secrets.toml                              # ⚠️ NO subir a Git
+└── instalar_linux_mac.sh
 ```
 
 ---
 
-## 2. requirements.txt
+## 2. Configurar Supabase
 
-```txt
-streamlit>=1.32.0,<2.0.0
-pandas>=2.0.0,<3.0.0
-numpy>=1.24.0,<2.0.0
-openpyxl>=3.1.0,<4.0.0
-psycopg2-binary>=2.9.0,<3.0.0
-bcrypt>=4.0.0,<5.0.0
-pdfplumber>=0.10.0,<1.0.0
-```
-
-> **Nota sobre psycopg2:** En Streamlit Cloud usa `psycopg2-binary`. En servidores propios con PostgreSQL compilado puedes usar `psycopg2` sin el `-binary`.
-
----
-
-## 3. .gitignore
-
-```gitignore
-# Secretos — NUNCA en Git
-.streamlit/secrets.toml
-*.db
-amazon_quality.db
-.env
-
-# Python
-__pycache__/
-*.pyc
-venv/
-.venv/
-
-# Logs
-logs/
-*.log
-```
-
----
-
-## 4. Configurar Supabase
-
-### 4.1 Crear el proyecto
+### 2.1 Crear el proyecto
 1. Ir a [app.supabase.com](https://app.supabase.com) → **New project**
-2. Nombre: `winiw-production` (o similar)
-3. Región: `eu-west-1` (Europa — España)
-4. Contraseña de BD: genera una fuerte y guárdala
+2. Región: `eu-west-1` (Europa — España)
+3. Guarda la contraseña de BD generada
 
-### 4.2 Obtener credenciales
+### 2.2 Obtener credenciales
 1. **Settings → Database → Connection string**
 2. Selecciona **Transaction Pooler** (puerto 6543) — importante para Streamlit Cloud
 3. Copia: `host`, `database`, `user`, `password`
 
-### 4.3 Tablas — inicialización automática
-No necesitas crear tablas manualmente. Al primer arranque, `init_database()` crea y migra:
+### 2.3 Tablas — inicialización automática
+No necesitas crear tablas manualmente. Al primer arranque, la app crea y migra todo:
 
 | Tabla | Descripción |
 |-------|-------------|
-| `scorecards` | Datos por conductor (incluye `anio`, `driver_name`) |
-| `users` | Usuarios del sistema (incluye `centro` para JTs) |
+| `scorecards` | Datos por conductor y semana |
+| `users` | Usuarios del sistema |
 | `center_targets` | Objetivos de calidad por centro |
-| `login_attempts` | Rate limiting persistente y multi-worker |
+| `login_attempts` | Rate limiting persistente |
 | `station_scorecards` | KPIs del PDF oficial DSP |
-| `wh_exceptions` | Excepciones de horas (incluye `driver_name`, `anio`) |
+| `wh_exceptions` | Excepciones de horas WHC |
 
-Las migraciones son **idempotentes** — puedes arrancar sobre una BD existente de v3.7/v3.8 sin pérdida de datos.
+Las migraciones son **idempotentes** — puedes arrancar sobre una BD existente sin pérdida de datos.
 
 ---
 
-## 5. Variables de entorno obligatorias
+## 3. Variables de entorno
 
-> ⚠️ Sin estas dos variables la app no arranca.
+Configura las siguientes variables en Streamlit Cloud Secrets o en el archivo `.env` local.
 
+**Obligatorias:**
 ```bash
-WINIW_ADMIN_USER=mi_usuario_admin
-WINIW_ADMIN_PASS=mi_contraseña_segura_aqui
+WINIW_ADMIN_USER=<tu_usuario_admin>
+WINIW_ADMIN_PASS=<contraseña_segura>
 ```
 
-Opcionales si prefieres env vars en lugar de `secrets.toml` para Postgres:
-
+**Base de datos (alternativa a secrets.toml):**
 ```bash
-POSTGRES_HOST=db.xxxx.supabase.co
+POSTGRES_HOST=<host_supabase>
 POSTGRES_PORT=6543
 POSTGRES_DB=postgres
 POSTGRES_USER=postgres
-POSTGRES_PASSWORD=tu_password
+POSTGRES_PASSWORD=<tu_password>
 ```
 
 ---
 
-## 6. Deploy en Streamlit Cloud
+## 4. Deploy en Streamlit Cloud
 
-### 6.1 Subir el código a GitHub
+### 4.1 Subir el código a GitHub
 ```bash
-git init
+git clone https://github.com/Pablo25rf/Winiw-Tool.git
+cd Winiw-Tool
+# ... hacer cambios ...
 git add .
-git commit -m "feat: Winiw Quality Scorecard v3.9"
-git remote add origin https://github.com/pablo25rf/winiw.git
-git push -u origin main
+git commit -m "descripción"
+git push origin main
 ```
 
-### 6.2 Conectar en Streamlit Cloud
+### 4.2 Conectar en Streamlit Cloud
 1. [share.streamlit.io](https://share.streamlit.io) → **New app**
-2. Repositorio: `pablo25rf/winiw`
+2. Repositorio: `Pablo25rf/Winiw-Tool`
 3. Branch: `main`
 4. Main file path: `app.py`
 5. Clic en **Advanced settings** antes de Deploy
 
-### 6.3 Configurar los Secrets
-En **Advanced settings → Secrets**, pega el contenido del `secrets_toml.example` con tus credenciales reales:
-
-```toml
-[postgres]
-host     = "db.xxxxxxxxxxxxxxxxxxxx.supabase.co"
-port     = 6543
-database = "postgres"
-user     = "postgres"
-password = "TU_PASSWORD_REAL"
-
-[env]
-WINIW_ADMIN_USER = "mi_admin"
-WINIW_ADMIN_PASS = "mi_password_segura"
-```
+### 4.3 Configurar los Secrets
+En **Advanced settings → Secrets**, usa el formato del archivo `secrets.toml.example` con tus credenciales reales. El bloque `[postgres]` configura la base de datos; el bloque `[env]` configura las credenciales de acceso a la app.
 
 6. Clic en **Deploy**
 
 ---
 
-## 7. Primer acceso
+## 5. Primer acceso
 
 1. Abre la URL de tu app (`tu-app.streamlit.app`)
-2. Login con el usuario y contraseña definidos en `WINIW_ADMIN_USER` / `WINIW_ADMIN_PASS`
-3. **La app te forzará a cambiar la contraseña** en el primer acceso
+2. Login con las credenciales configuradas en los Secrets
+3. **La app fuerza cambio de contraseña en el primer acceso**
 4. Crea usuarios JT desde Admin → Gestión de Usuarios
 
 ---
 
-## 8. Entorno local (desarrollo)
+## 6. Entorno local (desarrollo)
 
 ```bash
-git clone https://github.com/pablo25rf/winiw.git
-cd winiw
+git clone https://github.com/Pablo25rf/Winiw-Tool.git
+cd Winiw-Tool
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
@@ -187,7 +134,7 @@ Sin `secrets.toml` ni variables Postgres, la app arranca con **SQLite local** au
 
 ---
 
-## 9. Tests antes de hacer push
+## 7. Tests antes de hacer push
 
 ```bash
 WINIW_ADMIN_USER=test WINIW_ADMIN_PASS=test python -m unittest test_scorecard_v39 -v
@@ -197,23 +144,23 @@ Resultado esperado: **159 tests OK, 14 skipped** (los skipped requieren el PDF r
 
 ---
 
-## 10. Actualizar la app
+## 8. Actualizar la app
 
 ```bash
 # Verificar tests
 python -m unittest test_scorecard_v39 -v
 
 # Commit y push
-git add -A
+git add app.py amazon_scorecard_ultra_robust_v3_FINAL.py
 git commit -m "descripción del cambio"
-git push
+git push origin main
 
 # Streamlit Cloud detecta el push y redespliega automáticamente (~1-2 min)
 ```
 
 ---
 
-## 11. Solución de problemas frecuentes
+## 9. Solución de problemas frecuentes
 
 | Problema | Causa probable | Solución |
 |----------|---------------|----------|
@@ -221,39 +168,31 @@ git push
 | `Secrets not found` | Mal configurado en Streamlit Cloud | Verificar sección `[postgres]` en Secrets |
 | Login bloqueado | Rate limiting activo en BD | Admin → Gestión de Usuarios → desbloquear |
 | BD vacía tras redeploy | SQLite local no persiste entre deploys | Usar Supabase en producción |
-| `bcrypt not found` | Solo aviso, no bloquea | Añadir `bcrypt` a requirements.txt |
-| Timeout Supabase | Demasiadas conexiones simultáneas | Usar puerto 6543 (PgBouncer) en vez de 5432 |
-| Caché no actualiza | TTL activo (5 min scorecards, 1 min sidebar) | Admin → sidebar → 🔄 Refrescar Datos |
-| Columna `anio` faltante | BD antigua pre-v3.9 | Migración automática al arrancar — no hace falta nada manual |
+| Timeout Supabase | Demasiadas conexiones | Usar puerto 6543 (PgBouncer) en vez de 5432 |
+| Caché no actualiza | TTL activo | Sidebar → 🔄 Refrescar Datos |
+| App muestra versión antigua | Push en rama incorrecta | Verificar que el push fue a `main` |
 
 ---
 
-## 12. Seguridad en producción
+## 10. Seguridad en producción
 
 - Cambiar contraseña del superadmin en el primer acceso
-- `bcrypt` recomendado para hashes seguros — si no está, degrada a SHA-256
 - Rotar credenciales de Supabase periódicamente: Settings → Database
-- Revisar logs: Admin → Zona Superadmin → descargar `winiw_app.log`
+- Revisar logs: Admin → Zona Superadmin → descargar log del sistema
 - Los JTs solo pueden ver sus semanas más recientes y su centro asignado
 
 ---
 
-## 13. Docker
+## 11. Docker
 
 ```bash
 # Build
 docker build -t winiw-scorecard .
 
 # Run con variables de entorno
-docker run -p 8501:8501 \
-  -e WINIW_ADMIN_USER=admin \
-  -e WINIW_ADMIN_PASS=password_segura \
-  winiw-scorecard
-
-# O usando un .env file
 docker run -p 8501:8501 --env-file .env winiw-scorecard
 ```
 
 ---
 
-*Winiw Quality Scorecard v3.9 · [@pablo25rf](https://github.com/pablo25rf) · Marzo 2026*
+*Winiw Quality Scorecard · [@pablo25rf](https://github.com/pablo25rf) · Marzo 2026*

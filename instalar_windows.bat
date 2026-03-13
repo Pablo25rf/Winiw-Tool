@@ -2,8 +2,8 @@
 REM ============================================================================
 REM WINIW QUALITY SCORECARD - INSTALACION RAPIDA (Windows)
 REM ============================================================================
-REM Version: 3.7
-REM Fecha: Febrero 2026
+REM Version: 3.9
+REM Fecha: Marzo 2026
 REM ============================================================================
 
 echo.
@@ -118,12 +118,13 @@ echo Proximos pasos:
 echo   1. Revisar README.md para documentacion completa
 echo   2. Ejecutar: streamlit run app.py
 echo   3. Abrir navegador en http://localhost:8501
-echo   4. Login con el usuario superadmin (ver WINIW_ADMIN_USER / WINIW_ADMIN_PASS en DEPLOY.md)
+echo   4. Login con las credenciales configuradas en .env (ver DEPLOY.md)
 echo   5. Cambiar contrasena en primer login (obligatorio)
 echo.
 echo Documentacion disponible:
 echo   - README.md: Guia completa del sistema
-echo   - CAMBIOS_APLICADOS.md: Detalles de mejoras implementadas
+echo   - DEPLOY.md: Guia de despliegue en Streamlit Cloud / Docker
+echo   - CHANGELOG.md: Historial de cambios por version
 echo.
 echo Logs del sistema:
 echo   - logs/winiw_scorecard.log (rotativo, max 10MB)
