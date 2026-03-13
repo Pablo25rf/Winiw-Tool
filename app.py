@@ -800,7 +800,7 @@ def check_login() -> bool:
         <div style='text-align:center;padding:3rem 0 1rem'>
             <div style='font-size:3rem'>🛡️</div>
             <h1 style='margin:0.5rem 0'>Winiw Quality Scorecard</h1>
-            <p style='color:#6c757d'>Sistema de Gestión de Calidad · Amazon DSP</p>
+            <p style='color:#6c757d'>Amazon DSP · Calidad</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -1009,7 +1009,7 @@ st.markdown("""
     <span style='font-size:2rem'>🛡️</span>
     <div>
         <h2 style='margin:0'>Winiw Quality Scorecard</h2>
-        <p style='margin:0;color:#6c757d;font-size:0.9em'>Amazon DSP · Líderes en calidad</p>
+        <p style='margin:0;color:#6c757d;font-size:0.9em'>Amazon DSP</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -1029,8 +1029,7 @@ else:
 
 if tab_dash:
     with tab_dash:
-        st.header("🏢 Dashboard Ejecutivo")
-        st.markdown("Vista consolidada de todos los centros — última semana disponible por centro.")
+        st.header("📊 Resumen de Centros")
 
         with st.spinner("Cargando datos de todos los centros..."):
             df_exec = cached_executive_summary(_DB_KEY, db_config)
@@ -1358,8 +1357,7 @@ if tab_dash:
 
 if tab_proc:
     with tab_proc:
-        st.header("🚀 Procesamiento de Archivos")
-        st.markdown("Sube los archivos semanales de Amazon para generar el scorecard automático.")
+        st.header("📂 Subir Archivos")
 
         uploaded_files = st.file_uploader(
             "📁 Arrastra o selecciona archivos",
@@ -1668,8 +1666,7 @@ if tab_proc:
 
 if tab_dsp:
     with tab_dsp:
-        st.header("📋 DSP Weekly Scorecard — PDF oficial Amazon")
-        st.markdown("Sube los PDFs semanales para guardar KPIs oficiales de estación y actualizar métricas de conductores.")
+        st.header("📋 PDFs Semanales")
 
         _last_result = st.session_state.pop('_dsp_last_result', None)
         if _last_result:
@@ -3814,8 +3811,8 @@ st.markdown("---")
 st.markdown("""
 <div style='display:flex;justify-content:space-between;align-items:center;
             color:#6c757d;font-size:0.8em'>
-    <span>🛡️ Winiw Quality Scorecard v3.9 · Amazon DSP</span>
-    <span>Supabase guarda todo · Streamlit optimiza los recursos</span>
+    <span>🛡️ Winiw · Amazon DSP</span>
+    <span></span>
     <span>🏆 Lideres en calidad</span>
 </div>
 """, unsafe_allow_html=True)
