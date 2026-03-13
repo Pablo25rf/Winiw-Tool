@@ -1156,7 +1156,7 @@ if tab_dash:
                     <td style='padding:8px 10px;color:#6c757d'>{row.semana}</td>
                     <td style='padding:8px 10px;font-weight:800;color:{score_c};font-size:1.1em'>{row.score_medio}</td>
                     <td style='padding:8px 10px'>{delta_cell}</td>
-                    <td style='padding:8px 10px;text-align:center'><b style='color:{"#dc3545" if row.dnr_medio>=2 else "#198754"}'>{row.dnr_medio:.2f}</b></td>
+                    <td style='padding:8px 10px;text-align:center'><b style='color:{"#dc3545" if row.dnr_medio>=0.5 else "#fd7e14" if row.dnr_medio>=0.4 else "#198754"}'>{row.dnr_medio:.2f}</b></td>
                     <td style='padding:8px 10px;text-align:center'>{row.dcr_medio:.2f}%</td>
                     <td style='padding:8px 10px;text-align:center'>{row.pod_medio:.2f}%</td>
                     <td style='padding:8px 10px'>{pct_bar}</td>
