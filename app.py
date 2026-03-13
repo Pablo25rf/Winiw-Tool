@@ -807,8 +807,8 @@ def check_login() -> bool:
         c1, c2, c3 = st.columns([1, 1.5, 1])
         with c2:
             with st.form("login_form"):
-                username = st.text_input("👤 Usuario")
-                password = st.text_input("🔒 Contraseña", type="password")
+                username = st.text_input("👤 Usuario", max_chars=100)
+                password = st.text_input("🔒 Contraseña", type="password", max_chars=128)
                 submitted = st.form_submit_button("Iniciar Sesión", use_container_width=True, type="primary")
 
                 if submitted:
@@ -1276,7 +1276,7 @@ if tab_dash:
                 with tc1:
                     st.markdown("**Score medio**")
                     _df_score = df_trend_c[['semana', 'score_medio']].copy()
-                    _df_score['score_medio'] = _df_score['score_medio'].astype(float)
+                    _df_score['score_medio'] = pd.to_numeric(_df_score['score_medio'], errors='coerce').fillna(0.0)
                     _s_min = max(0, float(_df_score['score_medio'].min()) - 10)
                     _s_max = min(100, float(_df_score['score_medio'].max()) + 10)
                     st.altair_chart(
@@ -1293,7 +1293,7 @@ if tab_dash:
                 with tc2:
                     st.markdown("**DNR medio**")
                     _df_dnr = df_trend_c[['semana', 'dnr_medio']].copy()
-                    _df_dnr['dnr_medio'] = _df_dnr['dnr_medio'].astype(float)
+                    _df_dnr['dnr_medio'] = pd.to_numeric(_df_dnr['dnr_medio'], errors='coerce').fillna(0.0)
                     _d_max = max(1.0, float(_df_dnr['dnr_medio'].max()) * 1.3)
                     st.altair_chart(
                         alt.Chart(_df_dnr)

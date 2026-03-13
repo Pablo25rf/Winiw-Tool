@@ -17,7 +17,8 @@ import numpy as np
 _THIS_YEAR = 2025
 
 os.environ.setdefault("WINIW_ADMIN_USER", "test_admin")
-os.environ.setdefault("WINIW_ADMIN_PASS", "Test_Pass_Seguro_2024!")
+if "WINIW_ADMIN_PASS" not in os.environ:
+    raise EnvironmentError("WINIW_ADMIN_PASS environment variable must be set before running tests")
 
 import amazon_scorecard_ultra_robust_v3_FINAL as sc
 

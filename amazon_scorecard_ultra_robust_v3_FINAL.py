@@ -1625,10 +1625,11 @@ def init_database(db_config: Optional[Dict] = None):
                 "CREATE INDEX IF NOT EXISTS idx_centro_semana  ON scorecards (centro, semana)",
                 "CREATE INDEX IF NOT EXISTS idx_fecha_desc     ON scorecards (fecha_semana DESC)",
                 "CREATE INDEX IF NOT EXISTS idx_driver_id      ON scorecards (driver_id)",
-                "CREATE INDEX IF NOT EXISTS idx_driver_name    ON scorecards (driver_name)",
+                "CREATE INDEX IF NOT EXISTS idx_driver_name    ON scorecards (driver_name COLLATE NOCASE)",
                 "CREATE INDEX IF NOT EXISTS idx_calificacion   ON scorecards (calificacion)",
                 "CREATE INDEX IF NOT EXISTS idx_centro_fecha   ON scorecards (centro, fecha_semana)",
                 "CREATE INDEX IF NOT EXISTS idx_ranking        ON scorecards (centro, semana, score DESC)",
+                "CREATE INDEX IF NOT EXISTS idx_centro_timestamp ON scorecards (centro, timestamp DESC)",
             ]
             for idx_sql in sqlite_indexes:
                 try:
@@ -2130,6 +2131,11 @@ def week_to_date(week_str: str, year: int = None) -> str:
     except (ValueError, TypeError, AttributeError):
         return "2025-01-06"
 
+def _safe_float(v, default=0.0):
+    try: return float(v) if v is not None and str(v) not in ('nan','None','') else default
+    except (ValueError, TypeError): return default
+
+
 def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Optional[Dict] = None,
                      uploaded_by: str = "System", clean_first: bool = True,
                      year: Optional[int] = None) -> bool:
@@ -2157,10 +2163,6 @@ def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Option
 
         placeholder = "%s" if is_postgres else "?"
         placeholders = ", ".join([placeholder] * len(cols))
-
-        def _safe_float(v, default=0.0):
-            try: return float(v) if v is not None and str(v) not in ('nan','None','') else default
-            except (ValueError, TypeError): return default
 
         year_int = int(date_week[:4]) if date_week else None
 
