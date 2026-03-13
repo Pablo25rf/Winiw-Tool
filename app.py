@@ -2041,7 +2041,7 @@ if tab_dsp:
                 st.markdown("---")
                 st.subheader("🏆 Ranking Overall Score — Última Semana")
                 st.caption("Score oficial del PDF DSP en la semana más reciente disponible por centro.")
-                df_latest_ss = (df_ss.sort_values('fecha_semana', ascending=False)
+                df_latest_ss = (df_ss.sort_values('semana', ascending=False)
                                 .groupby('centro').first().reset_index())
                 df_latest_ss['score_f'] = pd.to_numeric(df_latest_ss['overall_score'], errors='coerce')
                 df_latest_ss = df_latest_ss.dropna(subset=['score_f']).sort_values('score_f', ascending=False)
@@ -2077,10 +2077,7 @@ if tab_dsp:
                         .encode(x=alt.X('centro:N', sort=_sort_ss),
                                 y=alt.Y('score_f:Q', scale=alt.Scale(domain=[_y_min_ss, _y_max_ss])),
                                 text=alt.Text('label:N')))
-                    st.altair_chart(
-                        (_bars_ss + _text_ss).properties(padding={"bottom": 60}),
-                        use_container_width=True
-                    )
+                    st.altair_chart(_bars_ss + _text_ss, use_container_width=True)
 
                 # ── GRÁFICO 2: Tendencia temporal ────────────────────────────
                 st.markdown("---")
@@ -2090,7 +2087,7 @@ if tab_dsp:
                 _sel_c_ss = st.selectbox("Seleccionar centro", _centros_ss, key="ss_trend_centro")
                 df_tr_ss = df_ss[df_ss['centro'] == _sel_c_ss].copy()
                 df_tr_ss['score_f'] = pd.to_numeric(df_tr_ss['overall_score'], errors='coerce')
-                df_tr_ss = df_tr_ss.dropna(subset=['score_f', 'fecha_semana']).sort_values('fecha_semana')
+                df_tr_ss = df_tr_ss.dropna(subset=['score_f']).sort_values('semana')
                 if len(df_tr_ss) < 2:
                     st.info("Se necesitan al menos 2 semanas de datos para mostrar la tendencia.")
                 else:
