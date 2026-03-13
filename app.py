@@ -231,7 +231,7 @@ def cached_meta(_db_config_key: str, db_config: dict, allowed_weeks: list = None
                 where = f"WHERE semana IN ({placeholders})"
                 params = allowed_weeks
             df = pd.read_sql_query(
-                f"SELECT DISTINCT centro, semana, calificacion FROM scorecards {where} ORDER BY fecha_semana DESC, semana DESC",
+                f"SELECT DISTINCT centro, semana, calificacion FROM scorecards {where} ORDER BY semana DESC",
                 conn, params=params
             )
         return df
@@ -369,6 +369,7 @@ def cached_centro_tendencia(_db_config_key: str, db_config: dict, centro: str) -
             ph = "%s" if db_config['type'] == 'postgresql' else "?"
             df = pd.read_sql_query(
                 f"""SELECT semana,
+                       MIN(fecha_semana) AS fecha_semana,
                        AVG(score)  AS score_medio,
                        AVG(dnr)    AS dnr_medio,
                        AVG(dcr)*100 AS dcr_medio,
@@ -379,7 +380,7 @@ def cached_centro_tendencia(_db_config_key: str, db_config: dict, centro: str) -
                        SUM(CASE WHEN calificacion='⚠️ FAIR'      THEN 1 ELSE 0 END) AS n_fair,
                        SUM(CASE WHEN calificacion='🛑 POOR'      THEN 1 ELSE 0 END) AS n_poor
                    FROM scorecards WHERE centro = {ph}
-                   GROUP BY semana ORDER BY fecha_semana ASC, semana ASC""",
+                   GROUP BY semana ORDER BY MIN(fecha_semana) ASC, semana ASC""",
                 conn, params=(centro,)
             )
         if df.empty:
@@ -437,7 +438,7 @@ def cached_prev_week(_db_config_key: str, db_config: dict, centro: str, semana: 
                 f"WHERE centro = {p} "
                 f"AND fecha_semana < (SELECT MIN(fecha_semana) FROM scorecards "
                 f"                    WHERE centro = {p} AND semana = {p}) "
-                f"GROUP BY semana ORDER BY fecha_semana DESC LIMIT 1",
+                f"GROUP BY semana ORDER BY MAX(fecha_semana) DESC LIMIT 1",
                 conn, params=(centro, centro, semana)
             )
         if df_meta.empty:
@@ -462,7 +463,7 @@ def cached_trend_batch(_db_config_key: str, db_config: dict, centro: str,
         with scorecard.db_connection(db_config) as conn:
             df_semanas = pd.read_sql_query(
                 f"SELECT DISTINCT semana FROM scorecards WHERE centro = {p} "
-                f"ORDER BY fecha_semana DESC, semana DESC LIMIT {n_weeks}",
+                f"ORDER BY semana DESC LIMIT {n_weeks}",
                 conn, params=(centro,)
             )
             if df_semanas.empty:
