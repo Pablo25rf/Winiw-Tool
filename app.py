@@ -1225,13 +1225,16 @@ if tab_dash:
                         tooltip=[alt.Tooltip('centro:N', title='Centro'),
                                  alt.Tooltip('score_medio:Q', title='Score', format='.1f'),
                                  alt.Tooltip('tier:N', title='Nivel')]
-                    ).properties(height=300, padding={"bottom": 60}))
+                    ).properties(height=300))
                 _text_score = (alt.Chart(df_chart)
                     .mark_text(dy=-10, fontSize=13, fontWeight='bold', color='white')
                     .encode(x=alt.X('centro:N', sort=_sort_order),
                             y=alt.Y('score_medio:Q', scale=alt.Scale(domain=[_y_min, _y_max])),
                             text=alt.Text('label:N')))
-                st.altair_chart(_bars + _text_score, use_container_width=True)
+                st.altair_chart(
+                    (_bars + _text_score).properties(padding={"bottom": 60}),
+                    use_container_width=True
+                )
 
             # ── Distribución global POOR ───────────────────────────────────
             if df_exec['n_poor'].sum() > 0:
