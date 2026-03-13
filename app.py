@@ -1117,7 +1117,7 @@ if tab_dash:
 
             rows_html = []
             for i, row in enumerate(df_exec.itertuples(index=False)):
-                bg = '#ffffff' if i % 2 == 0 else '#f8f9fa'
+                bg = '#1e2530' if i % 2 == 0 else '#262d3a'
                 score_c = (
                     _score_color(row.score_medio)
                 )
@@ -1152,7 +1152,7 @@ if tab_dash:
                 </tr>
                 """)
 
-            st.markdown(f"""
+            st.html(f"""
             <div style='overflow-x:auto;border-radius:8px;border:1px solid #dee2e6'>
             <table style='width:100%;border-collapse:collapse;font-size:0.9em'>
                 <thead>
@@ -1171,7 +1171,7 @@ if tab_dash:
                 </thead>
                 <tbody>{''.join(rows_html)}</tbody>
             </table></div>
-            """, unsafe_allow_html=True)
+            """)
 
             st.markdown("---")
 
@@ -3085,7 +3085,7 @@ if tab_admin:
 
             rows_html = []
             for i, row in enumerate(df_users.itertuples(index=False)):
-                bg = '#ffffff' if i % 2 == 0 else '#f8f9fa'
+                bg = '#1e2530' if i % 2 == 0 else '#262d3a'
 
                 # Estado de la cuenta
                 if not row.active:
