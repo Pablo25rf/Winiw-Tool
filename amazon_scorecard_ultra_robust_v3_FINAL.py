@@ -3234,7 +3234,7 @@ def get_station_scorecards(db_config=None) -> pd.DataFrame:
     try:
         with db_connection(db_config) as conn:
             query = """
-                SELECT ss.semana, ss.centro, ss.overall_score, ss.overall_standing,
+                SELECT ss.semana, ss.anio, ss.centro, ss.overall_score, ss.overall_standing,
                        ss.rank_station, ss.rank_wow,
                        ss.fico, ss.fico_tier, ss.whc_pct, ss.whc_tier,
                        ss.dcr_pct, ss.dcr_tier, ss.dnr_dpmo, ss.dnr_tier,
@@ -3257,7 +3257,7 @@ def get_station_scorecards(db_config=None) -> pd.DataFrame:
                     FROM wh_exceptions
                     GROUP BY semana, centro, anio
                 ) wh ON ss.semana = wh.semana AND ss.centro = wh.centro AND (ss.anio = wh.anio OR ss.anio IS NULL)
-                ORDER BY ss.centro ASC, ss.semana DESC
+                ORDER BY ss.centro ASC, ss.timestamp DESC
             """
             df = pd.read_sql_query(query, conn)
             df = df.loc[:, ~df.columns.duplicated()]  # fix: sqlite3.Row + LEFT JOIN puede duplicar cols
