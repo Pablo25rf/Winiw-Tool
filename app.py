@@ -1072,6 +1072,13 @@ if tab_dash:
 
             # ── Ranking de centros ─────────────────────────────────────────
             st.subheader("🏆 Ranking de Centros")
+            st.caption(
+                "Puntuación de 0 a 100 calculada por conductor. Parte de 100 y descuenta según incidencias: "
+                "DNR (hasta -70 pts), DCR bajo (hasta -40), POD bajo (hasta -25), CDF bajo (-15), "
+                "RTS alto (-15), CC bajo (-10), FDPS bajo (-10). "
+                "**💎 FANTASTIC** ≥90 · **🥇 GREAT** ≥80 · **⚠️ FAIR** ≥60 · **🛑 POOR** <60. "
+                "El score del centro es la media de todos sus conductores esa semana."
+            )
 
             rank_cols = st.columns(min(n_centros, 4))
             for i, row in enumerate(df_exec.itertuples(index=False)):
@@ -1114,6 +1121,7 @@ if tab_dash:
 
             # ── Tabla comparativa detallada ────────────────────────────────
             st.subheader("📊 Métricas Comparativas")
+            st.caption("Última semana disponible por centro. DCR = tasa de entregas completadas, POD = foto de entrega, FANTASTIC+GREAT = % de conductores en las dos mejores categorías.")
 
             rows_html = []
             for i, row in enumerate(df_exec.itertuples(index=False)):
@@ -1182,6 +1190,7 @@ if tab_dash:
 
             # ── Gráfico de barras: Score por centro ────────────────────────
             st.subheader("📈 Score Medio por Centro")
+            st.caption("Media del score de todos los conductores activos por centro en la última semana disponible. Verde = GREAT/FANTASTIC (≥80), Naranja = FAIR (60-79), Rojo = POOR (<60).")
             df_chart = df_exec[['centro', 'score_medio']].fillna(0).copy()
             df_chart['score_medio'] = df_chart['score_medio'].astype(float)
             if not df_chart.empty:
@@ -1243,7 +1252,7 @@ if tab_dash:
             # ── G) Tendencia semanal por centro ───────────────────────────
             st.markdown("---")
             st.subheader("📉 Tendencia Semanal por Centro")
-            st.caption("Evolución del score medio y distribución de calificaciones semana a semana.")
+            st.caption("Evolución semana a semana del score medio y DNR de cada centro. Se necesitan al menos 2 semanas de datos para mostrar el gráfico.")
 
             centros_trend = sorted(df_exec['centro'].tolist())
             sel_trend_centro = st.selectbox("Seleccionar centro", centros_trend,
@@ -2689,6 +2698,13 @@ with tab_excel:
 
 with tab_hist:
     st.header("📈 Histórico de Scorecards")
+    st.caption("Consulta y filtra todos los scorecards procesados. Usa los filtros para buscar por centro, semana, calificación o nombre de conductor.")
+
+    col_ref, _ = st.columns([1, 5])
+    with col_ref:
+        if st.button("🔄 Actualizar datos", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
 
     try:
         # JTs: solo semanas permitidas + centro asignado si tiene. Admins: todo.
@@ -2706,7 +2722,7 @@ with tab_hist:
             )
 
         if df_meta.empty:
-            st.info("📭 No hay datos. Procesa archivos primero.")
+            st.info("📭 No hay datos. Procesa archivos primero o pulsa **🔄 Actualizar datos** si acabas de subir archivos.")
         else:
             # ── Fila 1: filtros básicos ────────────────────────────────────
             col1, col2, col3 = st.columns(3)
