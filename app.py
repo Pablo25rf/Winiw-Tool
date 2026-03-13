@@ -1195,7 +1195,7 @@ if tab_dash:
             df_chart['score_medio'] = df_chart['score_medio'].astype(float)
             if not df_chart.empty:
                 _y_min = max(0, float(df_chart['score_medio'].min()) - 12)
-                _y_max = min(100, float(df_chart['score_medio'].max()) + 8)
+                _y_max = min(105, float(df_chart['score_medio'].max()) + 15)
                 df_chart['label'] = df_chart['score_medio'].apply(lambda x: f"{x:.1f}")
                 df_chart['tier'] = pd.cut(
                     df_chart['score_medio'],
