@@ -1178,6 +1178,7 @@ if tab_dash:
             # ── Gráfico de barras: Score por centro ────────────────────────
             st.subheader("📈 Score Medio por Centro")
             df_chart = df_exec[['centro', 'score_medio']].fillna(0).copy()
+            df_chart['score_medio'] = df_chart['score_medio'].astype(float)
             if not df_chart.empty:
                 _y_min = max(0, float(df_chart['score_medio'].min()) - 12)
                 _y_max = min(100, float(df_chart['score_medio'].max()) + 8)
@@ -1252,6 +1253,7 @@ if tab_dash:
                 with tc1:
                     st.markdown("**Score medio**")
                     _df_score = df_trend_c[['semana', 'score_medio']].copy()
+                    _df_score['score_medio'] = _df_score['score_medio'].astype(float)
                     _s_min = max(0, float(_df_score['score_medio'].min()) - 10)
                     _s_max = min(100, float(_df_score['score_medio'].max()) + 10)
                     st.altair_chart(
@@ -1268,6 +1270,7 @@ if tab_dash:
                 with tc2:
                     st.markdown("**DNR medio**")
                     _df_dnr = df_trend_c[['semana', 'dnr_medio']].copy()
+                    _df_dnr['dnr_medio'] = _df_dnr['dnr_medio'].astype(float)
                     _d_max = max(1.0, float(_df_dnr['dnr_medio'].max()) * 1.3)
                     st.altair_chart(
                         alt.Chart(_df_dnr)
