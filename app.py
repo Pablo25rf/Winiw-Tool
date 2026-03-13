@@ -2039,6 +2039,147 @@ if tab_dsp:
                     hide_index=True,
                     height=420,
                 )
+
+                # ── GRÁFICO 1: Ranking última semana ────────────────────────
+                st.markdown("---")
+                st.subheader("🏆 Ranking Overall Score — Última Semana")
+                st.caption("Score oficial del PDF DSP en la semana más reciente disponible por centro.")
+                df_latest_ss = (df_ss.sort_values('fecha_semana', ascending=False)
+                                .groupby('centro').first().reset_index())
+                df_latest_ss['score_f'] = pd.to_numeric(df_latest_ss['overall_score'], errors='coerce')
+                df_latest_ss = df_latest_ss.dropna(subset=['score_f']).sort_values('score_f', ascending=False)
+                if not df_latest_ss.empty:
+                    df_latest_ss['tier'] = df_latest_ss['overall_standing'].fillna('—')
+                    df_latest_ss['label'] = df_latest_ss['score_f'].apply(lambda x: f"{x:.1f}")
+                    _sort_ss = df_latest_ss['centro'].tolist()
+                    _y_min_ss = max(0, float(df_latest_ss['score_f'].min()) - 10)
+                    _y_max_ss = min(105, float(df_latest_ss['score_f'].max()) + 15)
+                    _cs_ss = alt.Scale(domain=['Fantastic', 'Great', 'Fair', 'Poor', '—'],
+                                       range=['#0F6CBD', '#067D50', '#FF9900', '#CC0000', '#6c757d'])
+                    _bar_ss = min(60, max(20, 400 // max(1, len(df_latest_ss))))
+                    _bars_ss = (alt.Chart(df_latest_ss)
+                        .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6, size=_bar_ss)
+                        .encode(
+                            x=alt.X('centro:N', sort=_sort_ss,
+                                    axis=alt.Axis(labelAngle=0, labelColor='white',
+                                                  labelFontSize=13, labelFontWeight='bold',
+                                                  titleColor='white', tickColor='white'),
+                                    title='Centro'),
+                            y=alt.Y('score_f:Q', scale=alt.Scale(domain=[_y_min_ss, _y_max_ss]),
+                                    axis=alt.Axis(labelColor='white', titleColor='white'),
+                                    title='Overall Score'),
+                            color=alt.Color('tier:N', scale=_cs_ss,
+                                            legend=alt.Legend(title='Standing', labelColor='white', titleColor='white')),
+                            tooltip=[alt.Tooltip('centro:N', title='Centro'),
+                                     alt.Tooltip('score_f:Q', title='Score', format='.1f'),
+                                     alt.Tooltip('tier:N', title='Standing'),
+                                     alt.Tooltip('semana:N', title='Semana')]
+                        ).properties(height=300))
+                    _text_ss = (alt.Chart(df_latest_ss)
+                        .mark_text(dy=-10, fontSize=13, fontWeight='bold', color='white')
+                        .encode(x=alt.X('centro:N', sort=_sort_ss),
+                                y=alt.Y('score_f:Q', scale=alt.Scale(domain=[_y_min_ss, _y_max_ss])),
+                                text=alt.Text('label:N')))
+                    st.altair_chart(
+                        (_bars_ss + _text_ss).properties(padding={"bottom": 60}),
+                        use_container_width=True
+                    )
+
+                # ── GRÁFICO 2: Tendencia temporal ────────────────────────────
+                st.markdown("---")
+                st.subheader("📈 Evolución del Score — Por Centro")
+                st.caption("Evolución semanal del Overall Score oficial del PDF DSP. Mínimo 2 semanas para mostrar.")
+                _centros_ss = sorted(df_ss['centro'].dropna().unique().tolist())
+                _sel_c_ss = st.selectbox("Seleccionar centro", _centros_ss, key="ss_trend_centro")
+                df_tr_ss = df_ss[df_ss['centro'] == _sel_c_ss].copy()
+                df_tr_ss['score_f'] = pd.to_numeric(df_tr_ss['overall_score'], errors='coerce')
+                df_tr_ss = df_tr_ss.dropna(subset=['score_f', 'fecha_semana']).sort_values('fecha_semana')
+                if len(df_tr_ss) < 2:
+                    st.info("Se necesitan al menos 2 semanas de datos para mostrar la tendencia.")
+                else:
+                    if 'anio' in df_tr_ss.columns:
+                        _aok = df_tr_ss['anio'].notna() & (df_tr_ss['anio'] != 0)
+                        df_tr_ss['sem_lbl'] = np.where(
+                            _aok,
+                            df_tr_ss['semana'] + '/' + df_tr_ss['anio'].where(_aok, 0).astype(int).astype(str),
+                            df_tr_ss['semana']
+                        )
+                    else:
+                        df_tr_ss['sem_lbl'] = df_tr_ss['semana'].astype(str)
+                    df_tr_ss['label'] = df_tr_ss['score_f'].apply(lambda x: f"{x:.1f}")
+                    _sort_tr = df_tr_ss['sem_lbl'].tolist()
+                    _y_lo = max(0, float(df_tr_ss['score_f'].min()) - 10)
+                    _y_hi = min(105, float(df_tr_ss['score_f'].max()) + 15)
+                    _line_ss = (alt.Chart(df_tr_ss)
+                        .mark_line(strokeWidth=3, color='#FF9900', point=alt.OverlayMarkDef(color='#FF9900', size=80))
+                        .encode(
+                            x=alt.X('sem_lbl:N', sort=_sort_tr,
+                                    axis=alt.Axis(labelAngle=-30, labelColor='white',
+                                                  labelFontSize=11, titleColor='white'),
+                                    title='Semana'),
+                            y=alt.Y('score_f:Q', scale=alt.Scale(domain=[_y_lo, _y_hi]),
+                                    axis=alt.Axis(labelColor='white', titleColor='white'),
+                                    title='Score'),
+                            tooltip=[alt.Tooltip('sem_lbl:N', title='Semana'),
+                                     alt.Tooltip('score_f:Q', title='Score', format='.1f'),
+                                     alt.Tooltip('overall_standing:N', title='Standing')]
+                        ))
+                    _txt_line = (alt.Chart(df_tr_ss)
+                        .mark_text(dy=-15, fontSize=12, fontWeight='bold', color='white')
+                        .encode(x=alt.X('sem_lbl:N', sort=_sort_tr),
+                                y=alt.Y('score_f:Q', scale=alt.Scale(domain=[_y_lo, _y_hi])),
+                                text=alt.Text('label:N')))
+                    st.altair_chart(
+                        (_line_ss + _txt_line).properties(height=280, padding={"bottom": 50}),
+                        use_container_width=True
+                    )
+
+                # ── GRÁFICO 3: Heatmap KPIs ──────────────────────────────────
+                st.markdown("---")
+                st.subheader("🗺️ Estado de KPIs por Centro — Última Semana")
+                st.caption("Tier de cada KPI clave en la semana más reciente. 🔵 Fantastic · 🟢 Great · 🟠 Fair · 🔴 Poor.")
+                _TIER_COLS = {
+                    'DCR': 'dcr_tier', 'DNR': 'dnr_tier', 'POD': 'pod_tier',
+                    'CC': 'cc_tier', 'FICO': 'fico_tier', 'Speeding': 'speeding_tier',
+                    'WHC': 'whc_tier', 'Mentor': 'mentor_tier',
+                    'Safety': 'safety_tier', 'Quality': 'quality_tier',
+                }
+                _TIER_NUM = {'Fantastic': 4, 'Great': 3, 'Fair': 2, 'Poor': 1}
+                _heat_rows = []
+                for _, _hr in df_latest_ss.iterrows():
+                    for _kpi, _col in _TIER_COLS.items():
+                        _t = str(_hr.get(_col) or '—')
+                        _heat_rows.append({'Centro': _hr['centro'], 'KPI': _kpi,
+                                           'Tier': _t, 'num': _TIER_NUM.get(_t, 0)})
+                if _heat_rows:
+                    df_heat = pd.DataFrame(_heat_rows)
+                    _kpi_order = list(_TIER_COLS.keys())
+                    _centro_order = df_latest_ss['centro'].tolist()
+                    _heat_cs = alt.Scale(domain=[0, 1, 2, 3, 4],
+                                         range=['#3d3d3d', '#CC0000', '#FF9900', '#067D50', '#0F6CBD'])
+                    _heat_ch = (alt.Chart(df_heat)
+                        .mark_rect(stroke='#1e2530', strokeWidth=1)
+                        .encode(
+                            x=alt.X('KPI:N', sort=_kpi_order,
+                                    axis=alt.Axis(labelColor='white', titleColor='white',
+                                                  labelFontSize=11, labelAngle=-20)),
+                            y=alt.Y('Centro:N', sort=_centro_order,
+                                    axis=alt.Axis(labelColor='white', titleColor='white',
+                                                  labelFontSize=12)),
+                            color=alt.Color('num:Q', scale=_heat_cs, legend=None),
+                            tooltip=[alt.Tooltip('Centro:N'), alt.Tooltip('KPI:N'),
+                                     alt.Tooltip('Tier:N', title='Tier')]
+                        ).properties(height=max(220, len(df_latest_ss) * 50)))
+                    _text_heat = (alt.Chart(df_heat)
+                        .mark_text(fontSize=11, fontWeight='bold', color='white')
+                        .encode(x=alt.X('KPI:N', sort=_kpi_order),
+                                y=alt.Y('Centro:N', sort=_centro_order),
+                                text=alt.Text('Tier:N')))
+                    st.altair_chart(
+                        (_heat_ch + _text_heat).properties(padding={"bottom": 40}),
+                        use_container_width=True
+                    )
+
         except Exception as e:
             st.error(f"❌ Error: {e}")
 
