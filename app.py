@@ -1244,10 +1244,14 @@ if tab_dash:
                     _bars_p = (alt.Chart(df_poor_chart)
                         .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6, color='#dc3545', size=min(80, max(20, 500 // max(1, len(df_poor_chart)))))
                         .encode(
-                            x=alt.X('centro:N', axis=alt.Axis(labelAngle=0), title='Centro'),
+                            x=alt.X('centro:N',
+                                    axis=alt.Axis(labelAngle=0, labelColor='white',
+                                                  labelFontSize=13, labelFontWeight='bold',
+                                                  titleColor='white', tickColor='white'),
+                                    title='Centro'),
                             y=alt.Y('n_poor:Q', title='Nº POOR',
                                     scale=alt.Scale(domain=[0, _top_poor]),
-                                    axis=alt.Axis(format='d')),
+                                    axis=alt.Axis(format='d', labelColor='white', titleColor='white')),
                             tooltip=[alt.Tooltip('centro:N', title='Centro'),
                                      alt.Tooltip('n_poor:Q', title='POOR')]
                         ).properties(height=230))
