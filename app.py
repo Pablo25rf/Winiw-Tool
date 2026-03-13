@@ -1225,7 +1225,7 @@ if tab_dash:
                         tooltip=[alt.Tooltip('centro:N', title='Centro'),
                                  alt.Tooltip('score_medio:Q', title='Score', format='.1f'),
                                  alt.Tooltip('tier:N', title='Nivel')]
-                    ).properties(height=300))
+                    ).properties(height=300, padding={"bottom": 60}))
                 _text_score = (alt.Chart(df_chart)
                     .mark_text(dy=-10, fontSize=13, fontWeight='bold', color='white')
                     .encode(x=alt.X('centro:N', sort=_sort_order),
