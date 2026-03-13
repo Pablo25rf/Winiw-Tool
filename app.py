@@ -1208,7 +1208,7 @@ if tab_dash:
                 )
                 # Barras horizontales — centro en eje Y (siempre visible, sin recorte)
                 _sort_order = df_chart.sort_values('score_medio', ascending=True)['centro'].tolist()
-                _bar_h = min(50, max(22, 300 // max(1, len(df_chart))))
+                _bar_h = min(30, max(16, 200 // max(1, len(df_chart))))
                 _x_max = min(100, float(df_chart['score_medio'].max()) + 8)
                 _bars = (alt.Chart(df_chart)
                     .mark_bar(cornerRadiusTopRight=6, cornerRadiusBottomRight=6, size=_bar_h)
@@ -1225,7 +1225,7 @@ if tab_dash:
                         tooltip=[alt.Tooltip('centro:N', title='Centro'),
                                  alt.Tooltip('score_medio:Q', title='Score', format='.1f'),
                                  alt.Tooltip('tier:N', title='Nivel')]
-                    ).properties(height=max(220, len(df_chart) * 42)))
+                    ).properties(height=max(260, len(df_chart) * 58)))
                 _text_score = (alt.Chart(df_chart)
                     .mark_text(align='left', dx=6, fontSize=13, fontWeight='bold', color='white')
                     .encode(y=alt.Y('centro:N', sort=_sort_order),
