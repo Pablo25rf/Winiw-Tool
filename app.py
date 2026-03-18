@@ -16,6 +16,7 @@ v3.7 (este archivo):
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import zipfile
 import tempfile
 import pathlib
@@ -293,7 +294,8 @@ def cached_executive_summary(_db_config_key: str, db_config: dict) -> pd.DataFra
                        AVG(s.dnr)             AS dnr_medio,
                        AVG(s.dcr)  * 100      AS dcr_medio,
                        AVG(s.pod)  * 100      AS pod_medio,
-                       SUM(CASE WHEN s.calificacion = '💎 FANTASTIC' THEN 1 ELSE 0 END) AS n_fantastic,
+                       SUM(CASE WHEN s.calificacion = '🌟 FANTASTIC+' THEN 1 ELSE 0 END) AS n_fantastic_plus,
+                       SUM(CASE WHEN s.calificacion IN ('🌟 FANTASTIC+','💎 FANTASTIC') THEN 1 ELSE 0 END) AS n_fantastic,
                        SUM(CASE WHEN s.calificacion = '🥇 GREAT'     THEN 1 ELSE 0 END) AS n_great,
                        SUM(CASE WHEN s.calificacion = '⚠️ FAIR'      THEN 1 ELSE 0 END) AS n_fair,
                        SUM(CASE WHEN s.calificacion = '🛑 POOR'      THEN 1 ELSE 0 END) AS n_poor,
@@ -375,7 +377,8 @@ def cached_centro_tendencia(_db_config_key: str, db_config: dict, centro: str) -
                        AVG(dcr)*100 AS dcr_medio,
                        AVG(pod)*100 AS pod_medio,
                        COUNT(*)    AS total,
-                       SUM(CASE WHEN calificacion='💎 FANTASTIC' THEN 1 ELSE 0 END) AS n_fantastic,
+                       SUM(CASE WHEN calificacion='🌟 FANTASTIC+' THEN 1 ELSE 0 END) AS n_fantastic_plus,
+                       SUM(CASE WHEN calificacion IN ('🌟 FANTASTIC+','💎 FANTASTIC') THEN 1 ELSE 0 END) AS n_fantastic,
                        SUM(CASE WHEN calificacion='🥇 GREAT'     THEN 1 ELSE 0 END) AS n_great,
                        SUM(CASE WHEN calificacion='⚠️ FAIR'      THEN 1 ELSE 0 END) AS n_fair,
                        SUM(CASE WHEN calificacion='🛑 POOR'      THEN 1 ELSE 0 END) AS n_poor
@@ -496,10 +499,11 @@ def db_config_key(db_config: dict) -> str:
 
 def _score_color(s) -> str:
     """Color hex según score."""
-    if s >= SCORE_FANTASTIC: return '#0d6efd'
-    elif s >= SCORE_GREAT:     return '#198754'
-    elif s >= SCORE_FAIR:       return '#fd7e14'
-    else:                       return '#dc3545'
+    if s >= SCORE_FANTASTIC_PLUS: return '#7c3aed'
+    elif s >= SCORE_FANTASTIC:    return '#0d6efd'
+    elif s >= SCORE_GREAT:        return '#198754'
+    elif s >= SCORE_FAIR:         return '#fd7e14'
+    else:                         return '#dc3545'
 
 
 def _fmt_pct(val, decimals=2) -> str:
@@ -733,6 +737,7 @@ def get_user_role(username: str, db_config: dict) -> str | None:
 # ── Renderers HTML ─────────────────────────────────────────────────────────────
 
 CALIFICACION_COLORS = {
+    '🌟 FANTASTIC+': '#7c3aed',
     '💎 FANTASTIC': '#0d6efd',
     '🥇 GREAT':     '#198754',
     '⚠️ FAIR':      '#fd7e14',
@@ -740,6 +745,7 @@ CALIFICACION_COLORS = {
 }
 
 # Umbrales de score — fuente única de verdad para colores y gráficos
+SCORE_FANTASTIC_PLUS = 93
 SCORE_FANTASTIC = 90
 SCORE_GREAT     = 80
 SCORE_FAIR      = 60
@@ -1076,7 +1082,7 @@ if tab_dash:
                 "Puntuación de 0 a 100 calculada por conductor. Parte de 100 y descuenta según incidencias: "
                 "DNR (hasta -70 pts), DCR bajo (hasta -40), POD bajo (hasta -25), CDF bajo (-15), "
                 "RTS alto (-15), CC bajo (-10), FDPS bajo (-10). "
-                "**💎 FANTASTIC** ≥90 · **🥇 GREAT** ≥80 · **⚠️ FAIR** ≥60 · **🛑 POOR** <60. "
+                "**🌟 FANTASTIC+** ≥93 · **💎 FANTASTIC** ≥90 · **🥇 GREAT** ≥80 · **⚠️ FAIR** ≥60 · **🛑 POOR** <60. "
                 "El score del centro es la media de todos sus conductores esa semana."
             )
 
@@ -1199,12 +1205,12 @@ if tab_dash:
                 df_chart['label'] = df_chart['score_medio'].apply(lambda x: f"{x:.1f}")
                 df_chart['tier'] = pd.cut(
                     df_chart['score_medio'],
-                    bins=[-1, SCORE_FAIR, SCORE_GREAT, SCORE_FANTASTIC, 101],
-                    labels=['Poor', 'Fair', 'Great', 'Fantastic']
+                    bins=[-1, SCORE_FAIR, SCORE_GREAT, SCORE_FANTASTIC, SCORE_FANTASTIC_PLUS, 101],
+                    labels=['Poor', 'Fair', 'Great', 'Fantastic', 'Fantastic+']
                 ).astype(str)
                 _color_scale = alt.Scale(
-                    domain=['Fantastic', 'Great', 'Fair', 'Poor'],
-                    range=['#0d6efd', '#198754', '#fd7e14', '#dc3545']
+                    domain=['Fantastic+', 'Fantastic', 'Great', 'Fair', 'Poor'],
+                    range=['#7c3aed', '#0d6efd', '#198754', '#fd7e14', '#dc3545']
                 )
                 # Barras horizontales — centro en eje Y (siempre visible, sin recorte)
                 _sort_order = df_chart.sort_values('score_medio', ascending=True)['centro'].tolist()

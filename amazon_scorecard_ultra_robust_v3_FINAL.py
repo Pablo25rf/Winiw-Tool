@@ -949,7 +949,9 @@ def calculate_score_v3_robust(row: pd.Series, targets: Optional[Dict] = None) ->
     score = max(0, score)
     
     # Determinar calificación final
-    if score >= 90:
+    if score >= 93:
+        calificacion = "🌟 FANTASTIC+"
+    elif score >= 90:
         calificacion = "💎 FANTASTIC"
     elif score >= 80:
         calificacion = "🥇 GREAT"
