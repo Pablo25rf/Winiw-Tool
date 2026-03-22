@@ -641,7 +641,7 @@ def process_dwc(df: pd.DataFrame) -> pd.DataFrame:
         
     res = pd.DataFrame({'ID': df['ID']})
     
-    if risk_group is not None:
+    if risk_group is not None and len(risk_group) > 0:
         res = res.merge(risk_group.reset_index().rename(columns={'Total': 'DNR_RISK_EVENTS'}), on='ID', how='left')
     else:
         res['DNR_RISK_EVENTS'] = dnr_risk_events
@@ -980,7 +980,8 @@ def extract_info_from_path(path: str) -> Tuple[str, str, Optional[int]]:
     week_match = re.search(r'(?:W|Week|Semana|S)[_\s-]*(\d+)', filename, re.IGNORECASE)
     if week_match:
         num = int(week_match.group(1))
-        week = f"W{num:02d}"
+        if 1 <= num <= 53:
+            week = f"W{num:02d}"
     else:
         # Intentar buscar por formato de fecha YYYY-MM-DD
         date_match = re.search(r'(\d{4})[_-](\d{1,2})[_-](\d{1,2})', filename)
@@ -1028,6 +1029,8 @@ def extract_info_from_path(path: str) -> Tuple[str, str, Optional[int]]:
         year_match = re.search(r'\b(20\d{2})\b', path)
     if year_match:
         year_extracted = int(year_match.group(1))
+    else:
+        year_extracted = datetime.now().year
 
     return week, center, year_extracted
 
@@ -3016,11 +3019,14 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
 
             # ── Obtener driver_ids existentes de una sola query ───────────
             all_ids = drivers_df['driver_id'].astype(str).tolist()
-            phs = ", ".join([ph] * len(all_ids))
-            
+
             if year is None:
                 year = datetime.now().year
 
+            if not all_ids:
+                return 0, 0
+
+            phs = ", ".join([ph] * len(all_ids))
             cursor.execute(
                 f"SELECT driver_id FROM scorecards "
                 f"WHERE semana={ph} AND centro={ph} AND anio={ph} AND driver_id IN ({phs})",
@@ -3121,7 +3127,7 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
                         week, fecha_ins, anio_ins, center,
                         did, '',            # driver_name: vacío, el CSV lo rellenará
                         calificacion, float(score),
-                        ent_v, 0.0, 0.0, 0.0,          # dnr, fs_count, dnr_risk_events = 0
+                        ent_v, 0, 0, 0,                 # dnr, fs_count, dnr_risk_events = 0
                         dcr_v, pod_v, cc_v, 1.0, 0.0, 1.0,  # dcr, pod, cc, fdps, rts, cdf
                         detalles, 'PDF', ts_ins,
                         # columnas _oficial

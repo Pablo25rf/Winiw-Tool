@@ -388,11 +388,13 @@ def cached_centro_tendencia(_db_config_key: str, db_config: dict, centro: str) -
             )
         if df.empty:
             return df
-        total_col = df['total'].replace(0, 1)  # evitar /0
-        df['pct_fantastic'] = (df['n_fantastic'] / total_col * 100).round(1)
-        df['pct_great']     = (df['n_great']     / total_col * 100).round(1)
-        df['pct_fair']      = (df['n_fair']       / total_col * 100).round(1)
-        df['pct_poor']      = (df['n_poor']       / total_col * 100).round(1)
+        mask = df['total'] > 0
+        for col in ['pct_fantastic', 'pct_great', 'pct_fair', 'pct_poor']:
+            df[col] = np.nan
+        df.loc[mask, 'pct_fantastic'] = (df.loc[mask, 'n_fantastic'] / df.loc[mask, 'total'] * 100).round(1)
+        df.loc[mask, 'pct_great']     = (df.loc[mask, 'n_great']     / df.loc[mask, 'total'] * 100).round(1)
+        df.loc[mask, 'pct_fair']      = (df.loc[mask, 'n_fair']      / df.loc[mask, 'total'] * 100).round(1)
+        df.loc[mask, 'pct_poor']      = (df.loc[mask, 'n_poor']      / df.loc[mask, 'total'] * 100).round(1)
         return df
     except Exception as e:
         _log.warning(f"cached_centro_tendencia error: {e}")
@@ -406,9 +408,11 @@ def _cached_sidebar_stats(_db_config_key: str, db_config: dict):
         with scorecard.db_connection(db_config) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM scorecards")
-            n_rec = cursor.fetchone()[0]
+            row = cursor.fetchone()
+            n_rec = row[0] if row else 0
             cursor.execute("SELECT COUNT(DISTINCT semana) FROM scorecards")
-            n_weeks = cursor.fetchone()[0]
+            row = cursor.fetchone()
+            n_weeks = row[0] if row else 0
             cursor.execute(
                 "SELECT semana, MAX(timestamp) as t FROM scorecards "
                 "GROUP BY semana ORDER BY t DESC LIMIT 1"
