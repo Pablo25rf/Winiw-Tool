@@ -167,6 +167,39 @@ class TestWeekToDate(unittest.TestCase):
         result = sc.week_to_date("INVALID")
         self.assertTrue(result is None or isinstance(result, str))
 
+    def test_week_00_no_crash(self):
+        # W00 es inválido — no debe crashear, devuelve string o None
+        result = sc.week_to_date("W00")
+        self.assertTrue(result is None or isinstance(result, str))
+
+    def test_week_53_no_crash(self):
+        # W53 es válido en algunos años — no debe crashear
+        result = sc.week_to_date("W53")
+        self.assertTrue(result is None or isinstance(result, str))
+
+    def test_explicit_year(self):
+        # Con año explícito debe devolver fecha válida (ISO W01 puede caer en dic del año anterior)
+        result = sc.week_to_date("W01", year=2025)
+        self.assertIsNotNone(result)
+        self.assertRegex(result, r'^\d{4}-\d{2}-\d{2}$')
+
+    def test_cross_year_high_week(self):
+        # Semana alta W52 con año explícito — devuelve fecha válida
+        result = sc.week_to_date("W52", year=2025)
+        self.assertIsNotNone(result)
+        self.assertRegex(result, r'^\d{4}-\d{2}-\d{2}$')
+
+    def test_cross_year_low_week(self):
+        # W10 con año explícito 2026 debe devolver fecha en 2026
+        result = sc.week_to_date("W10", year=2026)
+        self.assertIsNotNone(result)
+        self.assertTrue(result.startswith("2026"))
+
+    def test_na_input(self):
+        # "N/A" no debe crashear
+        result = sc.week_to_date("N/A")
+        self.assertIsNotNone(result)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. hash_password / verify_password
@@ -430,7 +463,7 @@ class TestCalculateScore(unittest.TestCase):
         self.assertGreater(s_ok, s_bad)
 
     def test_calificacion_is_valid(self):
-        valid = {"💎 FANTASTIC", "🥇 GREAT", "⚠️ FAIR", "🛑 POOR"}
+        valid = {"🌟 FANTASTIC+", "💎 FANTASTIC", "🥇 GREAT", "⚠️ FAIR", "🛑 POOR"}
         cal, _, _ = sc.calculate_score_v3_robust(self._perfect(), self.TARGETS)
         self.assertIn(cal, valid)
         cal2, _, _ = sc.calculate_score_v3_robust(self._terrible(), self.TARGETS)
@@ -580,6 +613,31 @@ class TestMergeDataSmart(unittest.TestCase):
     def test_all_optional_none(self):
         result = sc.merge_data_smart(self._conc(), None, None, None, None, None)
         self.assertIsInstance(result, pd.DataFrame)
+
+    def test_empty_concessions_no_crash(self):
+        # DataFrame de concesiones vacío — no debe crashear
+        empty = pd.DataFrame(columns=["ID", "Nombre", "DNR", "RTS", "Entregados"])
+        result = sc.merge_data_smart(empty, None, None, None, None, None)
+        self.assertIsInstance(result, pd.DataFrame)
+
+    def test_null_values_in_quality(self):
+        # Calidad con NaN — no debe propagar errores
+        qual_null = self._qual()
+        qual_null.loc[0, 'DCR'] = np.nan
+        qual_null.loc[1, 'POD'] = np.nan
+        result = sc.merge_data_smart(self._conc(), qual_null, None, None, None, None)
+        self.assertEqual(len(result), 3)
+
+    def test_mismatched_ids(self):
+        # IDs distintos entre concesiones y calidad — merge debe conservar las concesiones
+        conc = self._conc(3)
+        qual_other = pd.DataFrame({
+            "ID": ["ZZZZ1", "ZZZZ2"],
+            "DCR": [0.99, 0.98], "POD": [0.97, 0.96],
+            "CC": [0.95, 0.94], "CDF": [0.93, 0.92],
+        })
+        result = sc.merge_data_smart(conc, qual_other, None, None, None, None)
+        self.assertEqual(len(result), 3)  # conserva las 3 concesiones
 
 
 # ─────────────────────────────────────────────────────────────────────────────

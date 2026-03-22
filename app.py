@@ -841,7 +841,7 @@ def check_login() -> bool:
                         pw_hash, user_info = _get_user_credentials(uname, db_config)
                         if pw_hash and scorecard.verify_password(password, pw_hash):
                             scorecard.record_login_attempt(uname, success=True, db_config=db_config)
-                            st.session_state["user"] = user_info
+                            st.session_state["user"] = user_info.copy() if user_info else user_info
                             st.session_state["last_activity"] = datetime.now()
                             st.session_state["login_time"] = datetime.now()
                             if user_info and user_info.get("must_change_password"):
