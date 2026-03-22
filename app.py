@@ -1979,7 +1979,7 @@ if tab_dsp:
                     _anio_ok = df_filtrado['anio'].notna() & (df_filtrado['anio'] != 0)
                     df_filtrado['semana_año'] = np.where(
                         _anio_ok,
-                        df_filtrado['semana'] + '/' + df_filtrado['anio'].where(_anio_ok, 0).astype(int).astype(str),
+                        df_filtrado['semana'] + '/' + pd.to_numeric(df_filtrado['anio'], errors='coerce').fillna(0).astype(int).astype(str),
                         df_filtrado['semana']
                     )
                     _semana_col = 'semana_año'
@@ -2457,7 +2457,7 @@ with tab_excel:
                     is_poor   = cal == '🛑 POOR'
                     is_fair   = cal == '⚠️ FAIR'
                     is_great  = cal == '🥇 GREAT'
-                    is_fantas = cal == '💎 FANTASTIC'
+                    is_fantas = cal in ('💎 FANTASTIC', '🌟 FANTASTIC+')
                     prev_score = wow_map.get(row['driver_id'])
                     wow_str    = ""
                     if prev_score is not None:
@@ -2470,11 +2470,13 @@ with tab_excel:
                     mini_trend = _mini_trend_map.get(str(row['driver_id']), '')
 
                     # Label del expander
+                    _sc_lbl  = int(row['score']) if pd.notna(row['score']) else 0
+                    _dnr_lbl = int(row['dnr'])   if pd.notna(row['dnr'])   else 0
                     exp_label = (
                         f"{cal.split(' ')[0]} {row['driver_name']}  ·  "
-                        f"Score: {int(row['score'])}"
+                        f"Score: {_sc_lbl}"
                         + (f" ({delta_s:+.0f} WoW)" if prev_score is not None else "")
-                        + f"  ·  DNR: {int(row['dnr'])}  ·  DCR: {row['dcr']*100:.1f}%"
+                        + f"  ·  DNR: {_dnr_lbl}  ·  DCR: {row['dcr']*100:.1f}%"
                     )
 
                     # POOR y FAIR abren por defecto; GREAT y FANTASTIC cerrados
@@ -2783,19 +2785,22 @@ with tab_excel:
                             for _, dr in df_detail.iterrows():
                                 cal = str(dr['calificacion'])
                                 bg_cal = {
-                                    '💎 FANTASTIC': '#f0f4ff',
-                                    '🥇 GREAT':     '#f0fff4',
-                                    '⚠️ FAIR':      '#fffaf0',
-                                    '🛑 POOR':      '#fff5f5',
+                                    '🌟 FANTASTIC+': '#f5f0ff',
+                                    '💎 FANTASTIC':  '#f0f4ff',
+                                    '🥇 GREAT':      '#f0fff4',
+                                    '⚠️ FAIR':       '#fffaf0',
+                                    '🛑 POOR':       '#fff5f5',
                                 }.get(cal, 'white')
-                                dnr_c = '#dc3545' if dr['dnr'] >= 2 else '#198754'
+                                _sc_v = dr['score'] if pd.notna(dr['score']) else 0
+                                _dnr_v = dr['dnr'] if pd.notna(dr['dnr']) else 0
+                                dnr_c = '#dc3545' if _dnr_v >= 2 else '#198754'
                                 detail_rows.append(clean_html(f"""
                                 <tr style='background:{bg_cal}'>
                                     <td style='padding:6px 10px;font-weight:600'>{dr['semana']}</td>
                                     <td style='padding:6px 10px'>{render_calificacion(cal)}</td>
                                     <td style='padding:6px 10px;text-align:center;font-weight:700;
-                                        color:#{"198754" if dr["score"]>=80 else "dc3545"}'>{int(dr['score'])}</td>
-                                    <td style='padding:6px 10px;text-align:center;font-weight:700;color:{dnr_c}'>{int(dr['dnr'])}</td>
+                                        color:#{"198754" if _sc_v>=80 else "dc3545"}'>{int(_sc_v)}</td>
+                                    <td style='padding:6px 10px;text-align:center;font-weight:700;color:{dnr_c}'>{int(_dnr_v)}</td>
                                     <td style='padding:6px 10px;text-align:center'>{dr['dcr_%']:.2f}%</td>
                                     <td style='padding:6px 10px;text-align:center'>{dr['pod_%']:.2f}%</td>
                                     <td style='padding:6px 10px'>{render_detalles(str(dr.get('detalles','')))}</td>
