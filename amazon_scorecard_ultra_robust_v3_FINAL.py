@@ -22,6 +22,7 @@ from contextlib import contextmanager
 import re
 import os
 import sqlite3
+import html as _html_escape
 import io
 import hashlib
 HAS_POSTGRES = False
@@ -2107,7 +2108,6 @@ def reset_production_database(db_config: Optional[Dict] = None):
         return False
 
 
-@functools.lru_cache(maxsize=128)
 def week_to_date(week_str: str, year: int = None) -> str:
     """Convierte un string de semana 'W05' a la fecha del lunes de esa semana"""
     try:
@@ -3264,7 +3264,7 @@ def get_station_scorecards(db_config=None) -> pd.DataFrame:
                     SELECT semana, centro, anio, COUNT(*) AS wh_count
                     FROM wh_exceptions
                     GROUP BY semana, centro, anio
-                ) wh ON ss.semana = wh.semana AND ss.centro = wh.centro AND (ss.anio = wh.anio OR ss.anio IS NULL)
+                ) wh ON ss.semana = wh.semana AND ss.centro = wh.centro AND COALESCE(ss.anio, wh.anio) = wh.anio
                 ORDER BY ss.centro ASC, ss.timestamp DESC
             """
             df = pd.read_sql_query(query, conn)
@@ -3295,7 +3295,8 @@ def get_user_centro(username: str, db_config: Optional[Dict] = None) -> Optional
             )
             row = cursor.fetchone()
             if row and row[0]:
-                return str(row[0]).strip().upper() or None
+                v = str(row[0]).strip().upper()
+                return v if v else None
             return None
     except Exception as e:
         logger.error(f"get_user_centro error: {e}")
@@ -3441,9 +3442,9 @@ def check_and_send_alerts(week: str, center: str,
         for _, r in repeated_poor.iterrows():
             rows_html += (
                 f"<tr>"
-                f"<td style='padding:8px;border-bottom:1px solid #eee'>{r['driver_name']}</td>"
+                f"<td style='padding:8px;border-bottom:1px solid #eee'>{_html_escape.escape(str(r['driver_name']))}</td>"
                 f"<td style='padding:8px;border-bottom:1px solid #eee;color:#dc3545;font-weight:700'>{int(r['score'])}</td>"
-                f"<td style='padding:8px;border-bottom:1px solid #eee;font-size:0.9em'>{r['detalles']}</td>"
+                f"<td style='padding:8px;border-bottom:1px solid #eee;font-size:0.9em'>{_html_escape.escape(str(r['detalles']))}</td>"
                 f"</tr>"
             )
 

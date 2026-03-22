@@ -846,7 +846,7 @@ def check_login() -> bool:
                             st.session_state["login_time"] = datetime.now()
                             if user_info and user_info.get("must_change_password"):
                                 st.session_state["force_change_pw"] = True
-                            _audit(f"Login exitoso ({user_info['role']})")
+                            _audit(f"Login exitoso ({user_info.get('role', 'unknown')})")
                             st.rerun()
                         else:
                             scorecard.record_login_attempt(
