@@ -345,7 +345,9 @@ def cached_executive_summary(_db_config_key: str, db_config: dict) -> pd.DataFra
         df['n_fair']       = df['n_fair'].astype(int)
         df['n_poor']       = df['n_poor'].astype(int)
         df['total']        = df['total'].astype(int)
-        df['pct_top2']     = ((df['n_fantastic'] + df['n_great']) / df['total'] * 100).round(1)
+        _mask_t = df['total'] > 0
+        df['pct_top2'] = np.nan
+        df.loc[_mask_t, 'pct_top2'] = ((df.loc[_mask_t, 'n_fantastic'] + df.loc[_mask_t, 'n_great']) / df.loc[_mask_t, 'total'] * 100).round(1)
 
         return df.sort_values('score_medio', ascending=False).reset_index(drop=True)
 

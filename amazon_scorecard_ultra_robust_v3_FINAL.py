@@ -1606,6 +1606,7 @@ def init_database(db_config: Optional[Dict] = None):
                 "CREATE INDEX IF NOT EXISTS idx_poor_fair           ON scorecards (centro, semana, score) WHERE score < 70",
                 "CREATE INDEX IF NOT EXISTS idx_timestamp_desc      ON scorecards (timestamp DESC)",
                 "CREATE INDEX IF NOT EXISTS idx_semana_timestamp    ON scorecards (semana, timestamp DESC)",
+                "CREATE INDEX IF NOT EXISTS idx_anio                ON scorecards (anio)",
             ]
             for idx_sql in pg_indexes:
                 try:
@@ -1636,6 +1637,7 @@ def init_database(db_config: Optional[Dict] = None):
                 "CREATE INDEX IF NOT EXISTS idx_centro_fecha   ON scorecards (centro, fecha_semana)",
                 "CREATE INDEX IF NOT EXISTS idx_ranking        ON scorecards (centro, semana, score DESC)",
                 "CREATE INDEX IF NOT EXISTS idx_centro_timestamp ON scorecards (centro, timestamp DESC)",
+                "CREATE INDEX IF NOT EXISTS idx_anio           ON scorecards (anio)",
             ]
             for idx_sql in sqlite_indexes:
                 try:
@@ -2110,14 +2112,16 @@ def reset_production_database(db_config: Optional[Dict] = None):
 
 def week_to_date(week_str: str, year: int = None) -> str:
     """Convierte un string de semana 'W05' a la fecha del lunes de esa semana"""
+    _fallback_year = year or datetime.now().year
+    _fallback = f"{_fallback_year}-01-06"
     try:
         if not week_str or week_str == "N/A":
-            return "2025-01-06"
-        
+            return _fallback
+
         # Extraer número de semana
         match = re.search(r'(\d+)', week_str)
         if not match:
-            return "2025-01-06"
+            return _fallback
             
         week_num = int(match.group(1))
 
@@ -2134,7 +2138,7 @@ def week_to_date(week_str: str, year: int = None) -> str:
         start_date = d - timedelta(days=d.weekday()) + timedelta(weeks=week_num-1)
         return start_date.strftime("%Y-%m-%d")
     except (ValueError, TypeError, AttributeError):
-        return "2025-01-06"
+        return _fallback
 
 def _safe_float(v, default=0.0):
     try: return float(v) if v is not None and str(v) not in ('nan','None','') else default
@@ -2764,7 +2768,10 @@ def parse_dsp_scorecard_pdf(pdf_bytes: bytes) -> dict:
 
             # "Week 7" → W07
             m = re.search(r'Week\s+(\d+)', p1, re.IGNORECASE)
-            semana = f"W{int(m.group(1)):02d}" if m else None
+            if m and 1 <= int(m.group(1)) <= 53:
+                semana = f"W{int(m.group(1)):02d}"
+            else:
+                semana = None
 
             # Año: Buscar en todo el PDF de forma agresiva
             year = None
