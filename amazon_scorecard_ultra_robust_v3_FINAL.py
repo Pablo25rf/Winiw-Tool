@@ -2124,6 +2124,8 @@ def week_to_date(week_str: str, year: int = None) -> str:
             return _fallback
             
         week_num = int(match.group(1))
+        if not (1 <= week_num <= 53):
+            return _fallback
 
         if year is None:
             year = datetime.now().year

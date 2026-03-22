@@ -1788,7 +1788,7 @@ if tab_dsp:
                         _s = _p['station']
                         _c, _w, _yr = _m['centro'], _m['semana'], _m.get('year')
                         if _yr is None:
-                            _yr = 2025
+                            _yr = datetime.now().year
                         try:
                             _ok_st, _err_st = scorecard.save_station_scorecard(
                                 _s, _w, _c, db_config, user_data_session['name'],
@@ -2759,9 +2759,10 @@ with tab_excel:
                             ))
                         # Líneas de umbral como reglas horizontales
                         _thresholds = pd.DataFrame([
-                            {'y': 90, 'label': 'FANTASTIC', 'color': '#0d6efd'},
-                            {'y': 80, 'label': 'GREAT',     'color': '#198754'},
-                            {'y': 60, 'label': 'FAIR',      'color': '#fd7e14'},
+                            {'y': SCORE_FANTASTIC_PLUS, 'label': 'FANTASTIC+', 'color': '#7c3aed'},
+                            {'y': SCORE_FANTASTIC,      'label': 'FANTASTIC',  'color': '#0d6efd'},
+                            {'y': SCORE_GREAT,          'label': 'GREAT',      'color': '#198754'},
+                            {'y': SCORE_FAIR,           'label': 'FAIR',       'color': '#fd7e14'},
                         ])
                         _lines_ref = (alt.Chart(_thresholds)
                             .mark_rule(strokeDash=[4, 4], opacity=0.6)
