@@ -8,9 +8,9 @@ Herramienta de gestión de calidad para operaciones de Logística. Procesa los d
 
 ## ¿Qué hace?
 
-- Procesa automáticamente los archivos semanales de Logística (CSVs de concesiones, calidad, excepciones WHC y el PDF de scorecard oficial)
-- Calcula un **score ponderado por conductor** con 8 métricas: DNR, DCR, POD, CC, RTS, CDF, FDPS y Fantásticos
-- Clasifica a cada conductor en cinco niveles: 🌟 FANTASTIC+ · 💎 FANTASTIC · 🥇 GREAT · ⚠️ FAIR · 🛑 POOR
+- Procesa automáticamente los archivos semanales de Logística
+- Calcula un **score ponderado por conductor** por métricas de desempeño
+- Clasifica a cada conductor en varios niveles de rendimiento
 - Muestra un **dashboard ejecutivo** con ranking de centros, tendencia semanal y distribución de niveles
 - Mantiene un **histórico completo** filtrable y exportable
 - Gestiona **usuarios con roles** (Superadmin / Admin / JT) con control de acceso por centro
@@ -111,7 +111,7 @@ Quality-Scorecard/
 QS_ADMIN_USER=test QS_ADMIN_PASS=test python -m unittest test_scorecard_v39 -v
 ```
 
-175 tests — 0 fallos. 13 skipped requieren el PDF real de DMA3.
+175 tests — 0 fallos. 13 skipped requieren un PDF real de centro (no bloqueantes).
 
 ---
 
@@ -121,6 +121,6 @@ Ver [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
-© 2026 Winiw · @pablo25rf · Todos los derechos reservados.
+© 2026 @pablo25rf · Todos los derechos reservados.
 
 Este software es propietario. Queda prohibido su uso, copia o distribución sin autorización escrita del titular. Ver [LICENSE](LICENSE).

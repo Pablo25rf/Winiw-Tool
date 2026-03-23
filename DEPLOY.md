@@ -140,7 +140,7 @@ Sin `secrets.toml` ni variables Postgres, la app arranca con **SQLite local** au
 QS_ADMIN_USER=test QS_ADMIN_PASS=test python -m unittest test_scorecard_v39 -v
 ```
 
-Resultado esperado: **175 tests OK, 13 skipped** (los skipped requieren el PDF real de DMA3 — no son bloqueantes para CI).
+Resultado esperado: **175 tests OK, 13 skipped** (los skipped requieren un PDF real de centro — no son bloqueantes para CI).
 
 ---
 

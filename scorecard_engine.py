@@ -1016,7 +1016,7 @@ def extract_info_from_path(path: str) -> Tuple[str, str, Optional[int]]:
                 except (ValueError, TypeError):
                     pass
     
-    # 2. Normalizar Centro (ej: DIC1, VLC1, MAD1, DMA3, ES-TDSL-DIC1)
+    # 2. Normalizar Centro (ej: CTR1, CTR2, ES-TDSL-CTR1)
     # Busca 3-4 letras seguidas de uno o más dígitos
     center_match = re.search(r'([A-Z]{3,4}\d+)', filename, re.IGNORECASE)
     if center_match:

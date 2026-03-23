@@ -936,7 +936,7 @@ class TestParseDspScorecardPdf(unittest.TestCase):
 # ═══════════════════════════════════════════════════════════════════════════
 
 PDF_PATH = os.path.join(os.path.dirname(__file__),
-    'ES-TDSL-DMA3-Week7-DSP-Scorecard-3_0__3_.pdf')
+    'ES-TDSL-CTR1-Week7-Scorecard.pdf')
 _PDF_BYTES = None
 if os.path.exists(PDF_PATH):
     with open(PDF_PATH, 'rb') as _f:
@@ -1017,10 +1017,10 @@ class TestSchemaV39(unittest.TestCase):
 
     def test_unique_constraint_no_duplica(self):
         """Upsert con mismo semana+centro+driver_id no duplica."""
-        sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
-        sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
+        sc.save_to_database(_make_drivers_df(), 'W07', 'CTR1', self.db)
+        sc.save_to_database(_make_drivers_df(), 'W07', 'CTR1', self.db)
         cnt = self.conn.execute(
-            "SELECT COUNT(*) FROM scorecards WHERE semana='W07' AND centro='DMA3'"
+            "SELECT COUNT(*) FROM scorecards WHERE semana='W07' AND centro='CTR1'"
         ).fetchone()[0]
         self.assertEqual(cnt, 3)
 
@@ -1038,27 +1038,27 @@ class TestSaveToDatabaseV39(unittest.TestCase):
         teardown_db(self.conn, self.tmp)
 
     def test_anio_relleno_al_guardar(self):
-        sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
+        sc.save_to_database(_make_drivers_df(), 'W07', 'CTR1', self.db)
         anios = [r[0] for r in self.conn.execute(
             "SELECT DISTINCT anio FROM scorecards WHERE semana='W07'").fetchall()]
         self.assertEqual(anios, [_THIS_YEAR])
 
     def test_driver_name_guardado_correctamente(self):
-        sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
+        sc.save_to_database(_make_drivers_df(), 'W07', 'CTR1', self.db)
         nombre = self.conn.execute(
             "SELECT driver_name FROM scorecards WHERE driver_id='A2ZZWVAGH7MFN4'"
         ).fetchone()[0]
         self.assertEqual(nombre, 'Juan García')
 
     def test_calificacion_fantastic_guardada(self):
-        sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
+        sc.save_to_database(_make_drivers_df(), 'W07', 'CTR1', self.db)
         cal = self.conn.execute(
             "SELECT calificacion FROM scorecards WHERE driver_id='A2ZZWVAGH7MFN4'"
         ).fetchone()[0]
         self.assertEqual(cal, '💎 FANTASTIC')
 
     def test_tres_drivers_insertados(self):
-        sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
+        sc.save_to_database(_make_drivers_df(), 'W07', 'CTR1', self.db)
         cnt = self.conn.execute(
             "SELECT COUNT(*) FROM scorecards").fetchone()[0]
         self.assertEqual(cnt, 3)
@@ -1072,52 +1072,52 @@ class TestSaveWhExceptionsV39(unittest.TestCase):
 
     def setUp(self):
         self.db, self.conn, self.tmp = make_db()
-        sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
+        sc.save_to_database(_make_drivers_df(), 'W07', 'CTR1', self.db)
 
     def tearDown(self):
         teardown_db(self.conn, self.tmp)
 
     def test_retorna_true(self):
         self.assertTrue(
-            sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db))
+            sc.save_wh_exceptions(_make_wh_df(), 'W07', 'CTR1', self.db))
 
     def test_guarda_tres_filas(self):
-        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
+        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'CTR1', self.db)
         cnt = self.conn.execute(
             "SELECT COUNT(*) FROM wh_exceptions WHERE semana='W07'"
         ).fetchone()[0]
         self.assertEqual(cnt, 3)
 
     def test_driver_name_lookup_juan(self):
-        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
+        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'CTR1', self.db)
         nombre = self.conn.execute(
             "SELECT driver_name FROM wh_exceptions WHERE driver_id='A2ZZWVAGH7MFN4'"
         ).fetchone()[0]
         self.assertEqual(nombre, 'Juan García')
 
     def test_driver_name_lookup_maria(self):
-        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
+        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'CTR1', self.db)
         nombre = self.conn.execute(
             "SELECT driver_name FROM wh_exceptions WHERE driver_id='A9XGFDJ3UDX1D'"
         ).fetchone()[0]
         self.assertEqual(nombre, 'María López')
 
     def test_driver_sin_csv_queda_null(self):
-        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
+        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'CTR1', self.db)
         nombre = self.conn.execute(
             "SELECT driver_name FROM wh_exceptions WHERE driver_id='AXXX_SIN_CSV'"
         ).fetchone()[0]
         self.assertIsNone(nombre)
 
     def test_anio_relleno_en_wh(self):
-        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
+        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'CTR1', self.db)
         anios = [r[0] for r in self.conn.execute(
             "SELECT DISTINCT anio FROM wh_exceptions").fetchall()]
         self.assertEqual(anios, [_THIS_YEAR])
 
     def test_idempotente_no_duplica(self):
-        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
-        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
+        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'CTR1', self.db)
+        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'CTR1', self.db)
         cnt = self.conn.execute(
             "SELECT COUNT(*) FROM wh_exceptions WHERE semana='W07'"
         ).fetchone()[0]
@@ -1125,11 +1125,11 @@ class TestSaveWhExceptionsV39(unittest.TestCase):
 
     def test_vacio_no_falla(self):
         self.assertTrue(
-            sc.save_wh_exceptions(pd.DataFrame(), 'W07', 'DMA3', self.db))
+            sc.save_wh_exceptions(pd.DataFrame(), 'W07', 'CTR1', self.db))
 
     def test_none_no_falla(self):
         self.assertTrue(
-            sc.save_wh_exceptions(None, 'W07', 'DMA3', self.db))
+            sc.save_wh_exceptions(None, 'W07', 'CTR1', self.db))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1143,7 +1143,7 @@ class TestStationScorecardWHCount(unittest.TestCase):
         self.conn.execute("""
             INSERT OR REPLACE INTO station_scorecards
                 (semana, centro, overall_score, overall_standing, rank_station)
-            VALUES ('W07', 'DMA3', 81.11, 'Great', 3)
+            VALUES ('W07', 'CTR1', 81.11, 'Great', 3)
         """)
         self.conn.commit()
 
@@ -1159,25 +1159,25 @@ class TestStationScorecardWHCount(unittest.TestCase):
         self.assertEqual(int(df.iloc[0]['wh_count']), 0)
 
     def test_wh_count_refleja_excepciones_reales(self):
-        sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
-        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
+        sc.save_to_database(_make_drivers_df(), 'W07', 'CTR1', self.db)
+        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'CTR1', self.db)
         df = sc.get_station_scorecards(self.db)
-        row = df[df['centro'] == 'DMA3'].iloc[0]
+        row = df[df['centro'] == 'CTR1'].iloc[0]
         self.assertEqual(int(row['wh_count']), 3)
 
     def test_wh_count_no_afecta_otras_semanas(self):
         """WHC de W08 no contamina el conteo de W07."""
-        sc.save_to_database(_make_drivers_df(), 'W07', 'DMA3', self.db)
-        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'DMA3', self.db)
+        sc.save_to_database(_make_drivers_df(), 'W07', 'CTR1', self.db)
+        sc.save_wh_exceptions(_make_wh_df(), 'W07', 'CTR1', self.db)
         # station_scorecard de W08 sin WHC
         self.conn.execute("""
             INSERT OR REPLACE INTO station_scorecards
                 (semana, centro, overall_score, overall_standing, rank_station)
-            VALUES ('W08', 'DMA3', 83.0, 'Great', 2)
+            VALUES ('W08', 'CTR1', 83.0, 'Great', 2)
         """)
         self.conn.commit()
         df = sc.get_station_scorecards(self.db)
-        w08 = df[(df['centro'] == 'DMA3') & (df['semana'] == 'W08')]
+        w08 = df[(df['centro'] == 'CTR1') & (df['semana'] == 'W08')]
         self.assertEqual(int(w08.iloc[0]['wh_count']), 0)
 
 
@@ -1252,7 +1252,7 @@ class TestParsePdfRealV39(unittest.TestCase):
         self.assertTrue(self.res['ok'])
 
     def test_centro_dma3(self):
-        self.assertEqual(self.res['meta']['centro'], 'DMA3')
+        self.assertEqual(self.res['meta']['centro'], 'CTR1')
 
     def test_semana_w07(self):
         self.assertEqual(self.res['meta']['semana'], 'W07')
@@ -1309,7 +1309,7 @@ class TestExtractInfoFromPath(unittest.TestCase):
     def test_year_fallback_when_no_year_in_path(self):
         """When filename has no year, year must default to current year."""
         week, center, year = sc.extract_info_from_path(
-            "/datos/DMA3-W07-scorecard.pdf")
+            "/datos/CTR1-W07-scorecard.pdf")
         self.assertEqual(year, datetime.now().year)
 
     def test_empty_path_returns_defaults(self):
@@ -1326,8 +1326,8 @@ class TestExtractInfoFromPath(unittest.TestCase):
 
     def test_week_out_of_range_ignored(self):
         """Week number 0 and >53 must not produce a valid Wxx."""
-        week_low, _, _ = sc.extract_info_from_path("/datos/DMA3-W00-2025.pdf")
-        week_high, _, _ = sc.extract_info_from_path("/datos/DMA3-W54-2025.pdf")
+        week_low, _, _ = sc.extract_info_from_path("/datos/CTR1-W00-2025.pdf")
+        week_high, _, _ = sc.extract_info_from_path("/datos/CTR1-W54-2025.pdf")
         self.assertEqual(week_low, "N/A")
         self.assertEqual(week_high, "N/A")
 

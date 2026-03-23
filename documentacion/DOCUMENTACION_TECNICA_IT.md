@@ -503,7 +503,7 @@ Verifica que el host en `secrets.toml` usa puerto **6543** (PgBouncer) y no 5432
 | 18 llamadas `.clear()` individuales | `_clear_all_caches()` centralizado |
 | Rate limiting en dict Python en memoria | Tabla `login_attempts` en BD |
 
-### Tiempos de referencia (DMA3, ~100 drivers)
+### Tiempos de referencia (~100 drivers)
 
 | Operación | Tiempo típico |
 |-----------|--------------|
