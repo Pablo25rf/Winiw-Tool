@@ -1556,7 +1556,7 @@ def init_database(db_config: Optional[Dict] = None):
         cursor = conn.cursor()
         is_postgres = db_config and db_config.get('type') == 'postgresql'
         
-        # 1. Tabla de Scorecards (Optimizada para Power BI)
+        # 1. Tabla de Scorecards
         if is_postgres:
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS scorecards (
@@ -1590,7 +1590,7 @@ def init_database(db_config: Optional[Dict] = None):
             pg_indexes = [
                 # Filtro principal app: centro + semana
                 "CREATE INDEX IF NOT EXISTS idx_centro_semana       ON scorecards (centro, semana)",
-                # Power BI: covering index con métricas
+                # covering index con métricas
                 "CREATE INDEX IF NOT EXISTS idx_bi_query            ON scorecards (centro, semana, fecha_semana) INCLUDE (score, dnr, dcr, calificacion)",
                 # Histórico ordenado por fecha
                 "CREATE INDEX IF NOT EXISTS idx_fecha_desc          ON scorecards (fecha_semana DESC)",
@@ -1860,7 +1860,7 @@ def init_database(db_config: Optional[Dict] = None):
 
         # ── MIGRACIÓN v3.9b: columna 'anio' en scorecards y wh_exceptions ───
         # INTEGER con el año ISO extraído de fecha_semana.
-        # Permite filtrar por año en Power BI sin parsear fechas.
+        # Permite filtrar por año sin parsear fechas.
         for _tbl in ("scorecards", "wh_exceptions"):
             try:
                 if is_postgres:
@@ -3188,7 +3188,7 @@ def save_wh_exceptions(wh_df: pd.DataFrame, week: str, center: str,
     Guarda las excepciones de Working Hours en wh_exceptions.
     Primero borra las del mismo centro+semana para evitar duplicados,
     luego inserta las nuevas.
-    Hace lookup de driver_name en scorecards para que Power BI pueda
+    Hace lookup de driver_name en scorecards para poder
     filtrar por conductor sin necesitar un JOIN manual.
     """
     if wh_df is None or wh_df.empty:

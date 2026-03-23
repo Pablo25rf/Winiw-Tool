@@ -6,7 +6,7 @@ alwaysApply: true
 # Quality Scorecard v3.9 Information
 
 ## Summary
-A comprehensive quality management system for Logística designed to process weekly CSV and PDF data. It automatically calculates weighted performance scores for drivers based on 8 key metrics (DNR, DCR, POD, CC, RTS, CDF, FDPS, FS) and generates real-time scorecards and rankings. The application features a role-based dashboard, PostgreSQL/Supabase production database support with SQLite failback for development, and automated Power BI export capabilities.
+A comprehensive quality management system for Logística designed to process weekly CSV and PDF data. It automatically calculates weighted performance scores for drivers based on 8 key metrics (DNR, DCR, POD, CC, RTS, CDF, FDPS, FS) and generates real-time scorecards and rankings. The application features a role-based dashboard, PostgreSQL/Supabase production database support with SQLite failback for development, and automated CSV export capabilities.
 
 ## Structure
 - `app.py`: Main Streamlit web application interface and user management.

@@ -13,6 +13,6 @@ venv/
 .vscode/
 *.md
 !README.md
-test_scorecard_v37.py
+test_scorecard_v39.py
 .github/
 exports/

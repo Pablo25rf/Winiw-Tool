@@ -3102,8 +3102,8 @@ with tab_hist:
                         )
                     if is_admin:
                         with dl2:
-                            if st.button("📦 Exportar todo (Power BI)", use_container_width=True,
-                                         help="Descarga TODOS los registros filtrados en un CSV optimizado para Power BI"):
+                            if st.button("📦 Exportar todo (CSV)", use_container_width=True,
+                                         help="Descarga TODOS los registros filtrados en formato CSV"):
                                 with st.spinner("Generando export completo..."):
                                     q_full = f"""
                                         SELECT semana, centro, driver_id, driver_name,
@@ -3130,7 +3130,7 @@ with tab_hist:
                                     st.download_button(
                                         f"⬇️ Descargar {len(df_full):,} filas",
                                         csv_full,
-                                        f"scorecard_export_powerbi_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                                        f"scorecard_export_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                                         "text/csv",
                                         use_container_width=True
                                     )
