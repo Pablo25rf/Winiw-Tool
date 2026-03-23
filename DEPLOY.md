@@ -19,7 +19,7 @@
 ```
 Quality-Scorecard/
 ├── app.py                                        # Aplicación principal
-├── amazon_scorecard_ultra_robust_v3_FINAL.py     # Motor de procesamiento
+├── scorecard_engine.py     # Motor de procesamiento
 ├── requirements.txt                              # Dependencias Python
 ├── .gitignore
 ├── .env.example                                  # Plantilla variables de entorno
@@ -67,8 +67,8 @@ Configura las siguientes variables en Streamlit Cloud Secrets o en el archivo `.
 
 **Obligatorias:**
 ```bash
-WINIW_ADMIN_USER=<tu_usuario_admin>
-WINIW_ADMIN_PASS=<contraseña_segura>
+QS_ADMIN_USER=<tu_usuario_admin>
+QS_ADMIN_PASS=<contraseña_segura>
 ```
 
 **Base de datos (alternativa a secrets.toml):**
@@ -137,7 +137,7 @@ Sin `secrets.toml` ni variables Postgres, la app arranca con **SQLite local** au
 ## 7. Tests antes de hacer push
 
 ```bash
-WINIW_ADMIN_USER=test WINIW_ADMIN_PASS=test python -m unittest test_scorecard_v39 -v
+QS_ADMIN_USER=test QS_ADMIN_PASS=test python -m unittest test_scorecard_v39 -v
 ```
 
 Resultado esperado: **175 tests OK, 13 skipped** (los skipped requieren el PDF real de DMA3 — no son bloqueantes para CI).
@@ -151,7 +151,7 @@ Resultado esperado: **175 tests OK, 13 skipped** (los skipped requieren el PDF r
 python -m unittest test_scorecard_v39 -v
 
 # Commit y push
-git add app.py amazon_scorecard_ultra_robust_v3_FINAL.py
+git add app.py scorecard_engine.py
 git commit -m "descripción del cambio"
 git push origin main
 
@@ -187,10 +187,10 @@ git push origin main
 
 ```bash
 # Build
-docker build -t winiw-scorecard .
+docker build -t quality-scorecard .
 
 # Run con variables de entorno
-docker run -p 8501:8501 --env-file .env winiw-scorecard
+docker run -p 8501:8501 --env-file .env quality-scorecard
 ```
 
 ---

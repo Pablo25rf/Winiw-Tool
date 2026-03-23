@@ -28,21 +28,21 @@ jobs:
       - name: Syntax check
         run: |
           python -m py_compile app.py
-          python -m py_compile amazon_scorecard_ultra_robust_v3_FINAL.py
+          python -m py_compile scorecard_engine.py
           python -m py_compile test_scorecard_v39.py
           echo "Syntax OK"
 
       - name: Lint critico (ruff)
         run: |
           pip install ruff --quiet
-          ruff check app.py amazon_scorecard_ultra_robust_v3_FINAL.py \
+          ruff check app.py scorecard_engine.py \
             --select=E9,F63,F7 --quiet
           echo "Sin errores criticos de lint"
 
       - name: Run tests
         env:
-          WINIW_ADMIN_USER: test_admin
-          WINIW_ADMIN_PASS: Test_Pass_Seguro_2024!
+          QS_ADMIN_USER: test_admin
+          QS_ADMIN_PASS: Test_Pass_Seguro_2024!
         run: python -m unittest test_scorecard_v39 -v
 
       - name: Upload logs on failure

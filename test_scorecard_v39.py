@@ -16,11 +16,11 @@ import numpy as np
 
 _THIS_YEAR = datetime.now().year
 
-os.environ.setdefault("WINIW_ADMIN_USER", "test_admin")
-if "WINIW_ADMIN_PASS" not in os.environ:
-    raise EnvironmentError("WINIW_ADMIN_PASS environment variable must be set before running tests")
+os.environ.setdefault("QS_ADMIN_USER", "test_admin")
+if "QS_ADMIN_PASS" not in os.environ:
+    raise EnvironmentError("QS_ADMIN_PASS environment variable must be set before running tests")
 
-import amazon_scorecard_ultra_robust_v3_FINAL as sc
+import scorecard_engine as sc
 
 
 # ─────────────────────────────────────────────────────────────────────────────

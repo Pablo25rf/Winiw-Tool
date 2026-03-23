@@ -10,7 +10,7 @@ A comprehensive quality management system for Logística designed to process wee
 
 ## Structure
 - `app.py`: Main Streamlit web application interface and user management.
-- `amazon_scorecard_ultra_robust_v3_FINAL.py`: Core processing engine for data ingestion and score calculation.
+- `scorecard_engine.py`: Core processing engine for data ingestion and score calculation.
 - `documentacion/`: Technical and user documentation including operation manuals and technical specs.
 - `instalar_windows.bat` / `instalar_linux_mac.sh`: Automated installation scripts for different OS environments.
 - `test_scorecard_v39.py`: Comprehensive test suite with over 150 unit tests.
@@ -56,9 +56,9 @@ streamlit run app.py
 **Framework**: Python `unittest`
 **Test Location**: Root directory (`test_scorecard_v39.py`)
 **Naming Convention**: `test_*.py`
-**Configuration**: Requires `WINIW_ADMIN_USER` and `WINIW_ADMIN_PASS` environment variables for authenticated tests.
+**Configuration**: Requires `QS_ADMIN_USER` and `QS_ADMIN_PASS` environment variables for authenticated tests.
 
 **Run Command**:
 ```bash
-WINIW_ADMIN_USER=test WINIW_ADMIN_PASS=test python -m unittest test_scorecard_v39 -v
+QS_ADMIN_USER=test QS_ADMIN_PASS=test python -m unittest test_scorecard_v39 -v
 ```

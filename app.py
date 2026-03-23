@@ -20,7 +20,7 @@ import numpy as np
 import zipfile
 import tempfile
 import pathlib
-import amazon_scorecard_ultra_robust_v3_FINAL as scorecard
+import scorecard_engine as scorecard
 import io
 import re
 import os
@@ -30,7 +30,7 @@ import altair as alt
 from datetime import datetime, timedelta
 
 # Logger de auditoría de la app (separado del motor)
-_log = logging.getLogger("winiw_app")
+_log = logging.getLogger("scorecard_app")
 if not _log.handlers:
     os.makedirs("logs", exist_ok=True)
     logging.basicConfig(
@@ -38,7 +38,7 @@ if not _log.handlers:
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler("logs/winiw_app.log", mode='a', encoding='utf-8'),
+            logging.FileHandler("logs/scorecard_app.log", mode='a', encoding='utf-8'),
         ]
     )
 
@@ -59,7 +59,7 @@ LOGIN_LOCKOUT_MINUTES = 15       # minutos de bloqueo tras agotar intentos
 # BOOTSTRAP: propagar st.secrets → os.environ para el motor (Streamlit Cloud)
 # ─────────────────────────────────────────────────────────────────────────────
 try:
-    for _k in ("WINIW_ADMIN_USER", "WINIW_ADMIN_PASS"):
+    for _k in ("QS_ADMIN_USER", "QS_ADMIN_PASS"):
         if _k not in os.environ:
             _v = st.secrets.get(_k) or st.secrets.get("app", {}).get(_k)
             if _v:
@@ -1952,7 +1952,7 @@ if tab_dsp:
                             st.markdown(
                                 f"<div style='background:#fff3cd;border-left:4px solid #FF9900;"
                                 f"padding:8px 12px;border-radius:4px;margin:12px 0 6px 0'>"
-                                f"🎯 <b>Focus Areas Amazon:</b>&nbsp; "
+                                f"🎯 <b>Focus Areas:</b>&nbsp; "
                                 f"1. {_fa1} &nbsp;·&nbsp; 2. {_fa2} &nbsp;·&nbsp; 3. {_fa3}</div>",
                                 unsafe_allow_html=True
                             )
@@ -2551,7 +2551,7 @@ with tab_excel:
                             with col_pdf:
                                 st.markdown(
                                     "<div style='font-weight:700;color:#ffc107;margin-bottom:6px'>"
-                                    "🏆 Scorecard Oficial Amazon (PDF)</div>",
+                                    "🏆 Scorecard Oficial (PDF)</div>",
                                     unsafe_allow_html=True
                                 )
                                 if has_pdf:
@@ -3127,7 +3127,7 @@ with tab_hist:
                                     st.download_button(
                                         f"⬇️ Descargar {len(df_full):,} filas",
                                         csv_full,
-                                        f"winiw_export_powerbi_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                                        f"scorecard_export_powerbi_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                                         "text/csv",
                                         use_container_width=True
                                     )
@@ -3732,13 +3732,13 @@ if tab_admin:
                     st.error(f"Error: {e}")
 
             with t2:
-                log_file = "logs/winiw_app.log"
+                log_file = "logs/scorecard_app.log"
                 if os.path.exists(log_file):
                     with open(log_file, 'r', encoding='utf-8') as f:
                         lines = f.readlines()
                     n = st.slider("Líneas a mostrar", 20, 500, 100)
                     st.code(''.join(lines[-n:]), language='log')
-                    st.download_button("📥 Descargar Logs", ''.join(lines), "winiw_app.log",
+                    st.download_button("📥 Descargar Logs", ''.join(lines), "scorecard_app.log",
                                        use_container_width=True)
                 else:
                     st.info("No hay logs disponibles aún.")
@@ -3971,7 +3971,7 @@ st.markdown("---")
 st.markdown("""
 <div style='display:flex;justify-content:space-between;align-items:center;
             color:#6c757d;font-size:0.8em'>
-    <span>🛡️ Quality Scorecard · <a href='https://github.com/pablo25rf' target='_blank' style='color:#6c757d;text-decoration:none'>@pablo25rf</a></span>
+    <span>🛡️ Quality Scorecard · @pablo25rf</span>
     <span></span>
     <span>🏆 Lideres en calidad</span>
 </div>

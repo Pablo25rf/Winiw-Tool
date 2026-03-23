@@ -56,7 +56,7 @@
 └────────────────────────┬─────────────────────────────────┘
                          │ llama a
 ┌────────────────────────▼─────────────────────────────────┐
-│   amazon_scorecard_ultra_robust_v3_FINAL.py (Motor)      │
+│   scorecard_engine.py (Motor)      │
 │  • Parsers CSV/Excel/HTML/PDF                             │
 │  • Motor de scoring (calculate_score_v3_robust)           │
 │  • ORM ligero: save_to_database, get_*, init_database     │
@@ -248,7 +248,7 @@ Columnas añadidas en migraciones anteriores que `init_database()` gestiona auto
 ### Credenciales
 
 - **Cero credenciales hardcodeadas en el código** (corregido en v3.5)
-- Bootstrap del superadmin lee exclusivamente de `WINIW_ADMIN_USER` y `WINIW_ADMIN_PASS`
+- Bootstrap del superadmin lee exclusivamente de `QS_ADMIN_USER` y `QS_ADMIN_PASS`
 - Las contraseñas nunca se loguean
 
 ---
@@ -306,7 +306,7 @@ update_drivers_from_pdf() → actualiza dcr_oficial, pod_oficial… en scorecard
 
 ## 7. Módulos y componentes
 
-### `amazon_scorecard_ultra_robust_v3_FINAL.py` — Motor
+### `scorecard_engine.py` — Motor
 
 | Función / clase | Descripción |
 |----------------|-------------|
@@ -396,8 +396,8 @@ Ver [DEPLOY.md](DEPLOY.md) para la guía paso a paso.
 
 ```bash
 # Clonar
-git clone https://github.com/pablo25rf/winiw.git
-cd winiw
+git clone https://github.com/Pablo25rf/Winiw-Tool.git
+cd Winiw-Tool
 
 # Entorno virtual
 python -m venv .venv && source .venv/bin/activate
@@ -406,8 +406,8 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 # Variables obligatorias
-export WINIW_ADMIN_USER=admin
-export WINIW_ADMIN_PASS=password_segura
+export QS_ADMIN_USER=admin
+export QS_ADMIN_PASS=password_segura
 
 # Arrancar
 streamlit run app.py
@@ -420,8 +420,8 @@ El repositorio incluye `.github/workflows/tests.yml` que ejecuta la suite comple
 ```yaml
 - name: Run tests
   env:
-    WINIW_ADMIN_USER: test_admin
-    WINIW_ADMIN_PASS: Test_Pass_Seguro_2024!
+    QS_ADMIN_USER: test_admin
+    QS_ADMIN_PASS: Test_Pass_Seguro_2024!
   run: python -m unittest test_scorecard_v39 -v
 ```
 
@@ -433,13 +433,13 @@ El repositorio incluye `.github/workflows/tests.yml` que ejecuta la suite comple
 
 ```bash
 # Ver logs en tiempo real
-tail -f winiw_app.log
+tail -f scorecard.log
 
 # Buscar errores
-grep ERROR winiw_app.log
+grep ERROR scorecard.log
 
 # Los últimos 100
-tail -100 winiw_app.log
+tail -100 scorecard.log
 ```
 
 Desde la app: **Administración → Zona Superadmin → Ver Logs**.

@@ -65,9 +65,9 @@ if [ -f "app.py" ]; then
     print_info "Backup: app.py -> app_OLD_$TIMESTAMP.py"
 fi
 
-if [ -f "amazon_scorecard_ultra_robust_v3_FINAL.py" ]; then
-    cp amazon_scorecard_ultra_robust_v3_FINAL.py "amazon_scorecard_OLD_$TIMESTAMP.py"
-    print_info "Backup: amazon_scorecard_ultra_robust_v3_FINAL.py -> amazon_scorecard_OLD_$TIMESTAMP.py"
+if [ -f "scorecard_engine.py" ]; then
+    cp scorecard_engine.py "amazon_scorecard_OLD_$TIMESTAMP.py"
+    print_info "Backup: scorecard_engine.py -> amazon_scorecard_OLD_$TIMESTAMP.py"
 fi
 
 print_success "Backups creados"
@@ -119,11 +119,11 @@ else
     print_info "Usando archivo existente"
 fi
 
-if [ -f "amazon_scorecard_ultra_robust_v3_FINAL.py" ]; then
-    cp -f amazon_scorecard_ultra_robust_v3_FINAL.py amazon_scorecard_ultra_robust_v3_FINAL.py
+if [ -f "scorecard_engine.py" ]; then
+    cp -f scorecard_engine.py scorecard_engine.py
     print_success "Motor actualizado"
 else
-    print_warning "No se encontró amazon_scorecard_ultra_robust_v3_FINAL.py"
+    print_warning "No se encontró scorecard_engine.py"
     print_info "Usando archivo existente"
 fi
 echo ""
@@ -149,7 +149,7 @@ echo "Próximos pasos:"
 echo "  1. Revisar README.md para documentación completa"
 echo "  2. Ejecutar: streamlit run app.py"
 echo "  3. Abrir navegador en http://localhost:8501"
-echo "  4. Login con el usuario superadmin configurado (ver WINIW_ADMIN_USER / WINIW_ADMIN_PASS)"
+echo "  4. Login con el usuario superadmin configurado (ver QS_ADMIN_USER / QS_ADMIN_PASS)"
 echo "  5. Cambiar contraseña en primer login (obligatorio)"
 echo ""
 echo "Documentación disponible:"

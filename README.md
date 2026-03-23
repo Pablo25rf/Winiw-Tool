@@ -70,8 +70,8 @@ Ver [DEPLOY.md](DEPLOY.md) para instrucciones detalladas paso a paso.
 ## Docker
 
 ```bash
-docker build -t winiw-scorecard .
-docker run -p 8501:8501 --env-file .env winiw-scorecard
+docker build -t quality-scorecard .
+docker run -p 8501:8501 --env-file .env quality-scorecard
 ```
 
 ---
@@ -91,7 +91,7 @@ docker run -p 8501:8501 --env-file .env winiw-scorecard
 ```
 Quality-Scorecard/
 ├── app.py                                    # Interfaz Streamlit
-├── amazon_scorecard_ultra_robust_v3_FINAL.py # Motor de procesamiento
+├── scorecard_engine.py # Motor de procesamiento
 ├── requirements.txt
 ├── .env.example
 ├── secrets.toml.example                      # Copiar a .streamlit/secrets.toml
@@ -108,7 +108,7 @@ Quality-Scorecard/
 ## Tests
 
 ```bash
-WINIW_ADMIN_USER=test WINIW_ADMIN_PASS=test python -m unittest test_scorecard_v39 -v
+QS_ADMIN_USER=test QS_ADMIN_PASS=test python -m unittest test_scorecard_v39 -v
 ```
 
 175 tests — 0 fallos. 13 skipped requieren el PDF real de DMA3.

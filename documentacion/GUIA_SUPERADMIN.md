@@ -6,7 +6,7 @@
 
 ## ¿Qué es Superadmin?
 
-**Superadmin** es el rol de máximo nivel del sistema. Solo el usuario configurado en `WINIW_ADMIN_USER` tiene este rol por defecto. Puedes promover otros usuarios una vez dentro.
+**Superadmin** es el rol de máximo nivel del sistema. Solo el usuario configurado en `QS_ADMIN_USER` tiene este rol por defecto. Puedes promover otros usuarios una vez dentro.
 
 ---
 
@@ -65,7 +65,7 @@
 
 ## Primer acceso
 
-Al arrancar la app por primera vez con `WINIW_ADMIN_USER` y `WINIW_ADMIN_PASS` definidas:
+Al arrancar la app por primera vez con `QS_ADMIN_USER` y `QS_ADMIN_PASS` definidas:
 
 1. El usuario superadmin se crea automáticamente (solo si no existe)
 2. Login con esas credenciales
@@ -173,7 +173,7 @@ conn.close()
 
 ## Checklist de primer despliegue
 
-- [ ] Definir `WINIW_ADMIN_USER` y `WINIW_ADMIN_PASS` en el entorno
+- [ ] Definir `QS_ADMIN_USER` y `QS_ADMIN_PASS` en el entorno
 - [ ] Arrancar la app (`streamlit run app.py`)
 - [ ] Login y cambio obligatorio de contraseña
 - [ ] Verificar que aparece la **Zona Superadmin**

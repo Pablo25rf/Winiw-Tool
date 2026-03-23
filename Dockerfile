@@ -28,7 +28,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # Copiar codigo fuente
 COPY app.py .
-COPY amazon_scorecard_ultra_robust_v3_FINAL.py .
+COPY scorecard_engine.py .
 
 # Crear directorio de logs
 RUN mkdir -p logs

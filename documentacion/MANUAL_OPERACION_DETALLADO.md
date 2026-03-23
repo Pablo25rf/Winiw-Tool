@@ -275,7 +275,7 @@ Solo visible para `superadmin`:
 | "No se pudo procesar el PDF" | Formato no reconocido | Verifica que es el PDF oficial semanal de Amazon |
 | Conductor con métricas `—` | Archivo de esa métrica no subido | Sube el archivo y reprocesa el lote |
 | Login bloqueado | 5 intentos fallidos | Admin → Administración → Desbloquear |
-| "RuntimeError: WINIW_ADMIN_USER not set" | Variables de entorno no configuradas | Definir `WINIW_ADMIN_USER` y `WINIW_ADMIN_PASS` |
+| "RuntimeError: QS_ADMIN_USER not set" | Variables de entorno no configuradas | Definir `QS_ADMIN_USER` y `QS_ADMIN_PASS` |
 | Score no coincide con PDF Amazon | CSV es semana completa; PDF puede ser parcial | Normal si el PDF es de mitad de semana |
 | BD vacía después de redeployar | SQLite local no persiste entre deploys | Usar Supabase en producción |
 | "bcrypt warning" en sidebar | bcrypt no instalado | Añadir `bcrypt>=4.1.0` a requirements.txt |

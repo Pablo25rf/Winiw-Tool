@@ -7,8 +7,8 @@ env/
 *.db
 *.sqlite
 *.sqlite3
-winiw.db
-winiw_backup.db
+scorecard.db
+scorecard_backup.db
 
 # ── Variables de entorno y secrets (NUNCA al repo) ───────────────────────────
 .env

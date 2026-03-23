@@ -1,7 +1,7 @@
 """
-Amazon Quality Scorecard Engine v3.9
+Quality Scorecard Engine v3.9
 =====================================
-Sistema de procesamiento y análisis de métricas de calidad para conductores Amazon.
+Sistema de procesamiento y análisis de métricas de calidad para conductores de Logística.
 Soporta PostgreSQL y SQLite con auto-migraciones y validaciones robustas.
 
 Versión: 3.9
@@ -1076,7 +1076,7 @@ def create_professional_excel(df: pd.DataFrame, output_path: str,
         # Título Principal (Corregido merge a columna I para cubrir 4 tarjetas)
         ws_summary.merge_cells('B2:I3')
         title_cell = ws_summary['B2']
-        title_cell.value = f'WINIW QUALITY SCORECARD - {center_name} - {week}'
+        title_cell.value = f'QUALITY SCORECARD - {center_name} - {week}'
         title_cell.font = font_title
         title_cell.fill = fill_header
         title_cell.alignment = align_center
@@ -1963,8 +1963,8 @@ def init_database(db_config: Optional[Dict] = None):
 
         # Asegurar que el usuario superadmin inicial existe — configurable por env vars
         import os as _os
-        _default_user = _os.environ.get("WINIW_ADMIN_USER")
-        _default_pw   = _os.environ.get("WINIW_ADMIN_PASS")
+        _default_user = _os.environ.get("QS_ADMIN_USER")
+        _default_pw   = _os.environ.get("QS_ADMIN_PASS")
         if not _default_user or not _default_pw:
             q_any_admin = ("SELECT COUNT(*) FROM users WHERE role IN ('admin','superadmin') AND active = 1"
                            if is_postgres else
@@ -1972,10 +1972,10 @@ def init_database(db_config: Optional[Dict] = None):
             cursor.execute(q_any_admin)
             _n_admins = cursor.fetchone()[0]
             if _n_admins > 0:
-                logger.warning("WINIW_ADMIN_USER/PASS no configuradas — se omite bootstrap (ya existen admins en BD).")
+                logger.warning("QS_ADMIN_USER/PASS no configuradas — se omite bootstrap (ya existen admins en BD).")
             else:
                 raise RuntimeError(
-                    "WINIW_ADMIN_USER y WINIW_ADMIN_PASS son obligatorias. "
+                    "QS_ADMIN_USER y QS_ADMIN_PASS son obligatorias. "
                     "Define estas variables de entorno antes de arrancar la app."
                 )
         else:

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.9.4] - 2026-03-22
+
+### Added
+
+- **Tier FANTASTIC+** (≥ 93 puntos): nuevo nivel de excelencia por encima de FANTASTIC. Color púrpura `#7c3aed`. Aplicado en motor de scoring, app Streamlit, histograma, leyenda, tabla de histórico y SQL de totales
+- **Tests nuevos** — suite ampliada a **175 tests** (0 fallos, 13 skipped):
+  - `TestCalculateScore.test_fantastic_plus_tier`: verifica que un conductor perfecto obtiene score ≥ 93 y calificación `🌟 FANTASTIC+`
+  - Nueva clase `TestExtractInfoFromPath` (6 tests): cobertura completa de `extract_info_from_path` — semana estándar, fallback de año a año actual, path vacío/None, semanas fuera de rango, centro por defecto TDSL
+
+### Fixed
+
+- **`import numpy as np` faltante** en `app.py` — causaba `NameError: name 'np' is not defined` en la pestaña PDF al generar el histograma de scores
+- **Año hardcodeado 2025** en `week_to_date` y en tests — sustituido por `datetime.now().year` para que el código no quede obsoleto al cambiar de año
+- **`fetchone()` sin comprobación de None** — guard añadido: `row = cursor.fetchone(); n_rec = row[0] if row else 0`
+- **División por cero en porcentajes** — mask `df['total'] > 0` con NaN para filas sin entregas
+- **`user_info['role']` sin clave** — cambiado a `user_info.get('role', 'unknown')`
+- **`is_fantas` no incluía FANTASTIC+** — corregido: `cal in ('💎 FANTASTIC', '🌟 FANTASTIC+')`
+- **`int(score)` con NaN** — guards en etiqueta de expander y tabla de detalle
+- **`risk_group` sin comprobación de None ni longitud vacía** — guard `if risk_group is not None and len(risk_group) > 0`
+- **`IN ()` SQL vacío** — early return si `all_ids` está vacío
+- **HTML escaping en emails de alerta** — `html.escape(str(r['driver_name']))` para evitar XSS en el cuerpo del correo
+
+---
+
 ## [3.9.3] - 2026-03-13
 
 ### Fixed
@@ -98,7 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Variables de entorno `WINIW_ADMIN_USER` y `WINIW_ADMIN_PASS` como obligatorias
+- Variables de entorno `QS_ADMIN_USER` y `QS_ADMIN_PASS` como obligatorias
 - Normalización automática de semana `W5` → `W05`
 - `Dockerfile` y `.dockerignore` para despliegue en contenedor
 - `.env.example` con plantilla de variables de entorno

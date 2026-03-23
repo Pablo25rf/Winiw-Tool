@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM WINIW QUALITY SCORECARD - INSTALACION RAPIDA (Windows)
+REM QUALITY SCORECARD - INSTALACION RAPIDA (Windows)
 REM ============================================================================
 REM Version: 3.9
 REM Fecha: Marzo 2026
@@ -8,7 +8,7 @@ REM ============================================================================
 
 echo.
 echo ============================================================================
-echo     WINIW QUALITY SCORECARD - INSTALACION Y ACTUALIZACION
+echo     QUALITY SCORECARD - INSTALACION Y ACTUALIZACION
 echo ============================================================================
 echo.
 
@@ -32,9 +32,9 @@ if exist app.py (
     echo Backup: app.py -^> app_OLD_%date:~-4,4%%date:~-10,2%%date:~-7,2%.py
     copy app.py app_OLD_%date:~-4,4%%date:~-10,2%%date:~-7,2%.py >nul
 )
-if exist amazon_scorecard_ultra_robust_v3_FINAL.py (
-    echo Backup: amazon_scorecard_ultra_robust_v3_FINAL.py -^> amazon_scorecard_OLD_%date:~-4,4%%date:~-10,2%%date:~-7,2%.py
-    copy amazon_scorecard_ultra_robust_v3_FINAL.py amazon_scorecard_OLD_%date:~-4,4%%date:~-10,2%%date:~-7,2%.py >nul
+if exist scorecard_engine.py (
+    echo Backup: scorecard_engine.py -^> amazon_scorecard_OLD_%date:~-4,4%%date:~-10,2%%date:~-7,2%.py
+    copy scorecard_engine.py amazon_scorecard_OLD_%date:~-4,4%%date:~-10,2%%date:~-7,2%.py >nul
 )
 echo [OK] Backups creados
 echo.
@@ -83,11 +83,11 @@ if exist app.py (
     echo Usando archivo existente
 )
 
-if exist amazon_scorecard_ultra_robust_v3_FINAL.py (
-    copy /Y amazon_scorecard_ultra_robust_v3_FINAL.py amazon_scorecard_ultra_robust_v3_FINAL.py >nul
+if exist scorecard_engine.py (
+    copy /Y scorecard_engine.py scorecard_engine.py >nul
     echo [OK] Motor actualizado
 ) else (
-    echo [ADVERTENCIA] No se encontro amazon_scorecard_ultra_robust_v3_FINAL.py
+    echo [ADVERTENCIA] No se encontro scorecard_engine.py
     echo Usando archivo existente
 )
 echo.
@@ -127,7 +127,7 @@ echo   - DEPLOY.md: Guia de despliegue en Streamlit Cloud / Docker
 echo   - CHANGELOG.md: Historial de cambios por version
 echo.
 echo Logs del sistema:
-echo   - logs/winiw_scorecard.log (rotativo, max 10MB)
+echo   - logs/scorecard.log (rotativo, max 10MB)
 echo.
 
 REM Preguntar si desea ejecutar la aplicacion

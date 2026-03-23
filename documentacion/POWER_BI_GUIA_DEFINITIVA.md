@@ -956,7 +956,7 @@ Línea de referencia en 80: color `#63BE7B`, estilo discontinuo, etiqueta "Meta:
 
 ## PASO 7 — Tema Logística JSON
 
-Guardar como `tema_winiw_amazon.json` e importar con **Ver → Temas → Examinar temas**:
+Guardar como `tema_calidad.json` e importar con **Ver → Temas → Examinar temas**:
 
 ```json
 {
