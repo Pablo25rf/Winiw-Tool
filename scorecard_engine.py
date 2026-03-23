@@ -107,7 +107,7 @@ class Config:
     # DSC-Concessions debe verificarse ANTES que Concessions (tiene prioridad)
     PATTERN_DSC_CONCESSIONS = r'.*dsc.*concessions.*\.(csv|xlsx)'
     PATTERN_CONCESSIONS     = r'(?!.*dsc).*concessions.*\.(csv|xlsx)'  # excluye DSC
-    # Detecta: quality_overview, Amazon_Quality_Scorecard, quality-report, etc.
+    # Detecta: quality_overview, quality_scorecard, quality-report, etc.
     # Excluye: POD-Quality (que es un PDF de otro tipo)
     PATTERN_QUALITY = r'.*quality.*(overview|scorecard|report).*\.(csv|xlsx)'
     PATTERN_FALSE_SCAN = r'.*false.*scan.*\.html'
@@ -153,7 +153,7 @@ def safe_percentage(val) -> float:
         # Normalizar: eliminar %, espacios, y unificar separador decimal
         s = str(val).replace("%", "").strip()
         
-        # Amazon a veces usa puntos para miles y comas para decimales (EU)
+        # El portal a veces usa puntos para miles y comas para decimales (EU)
         if "," in s and "." in s:
             if s.find(",") > s.find("."):
                 s = s.replace(".", "").replace(",", ".") # EU: 1.234,56 -> 1234.56
@@ -255,7 +255,7 @@ def read_html_safe(filepath_or_buffer) -> Optional[pd.DataFrame]:
         for df in dfs:
             if df.empty: continue
             
-            # Aplanar multi-index si existe (Amazon usa mucho esto)
+            # Aplanar multi-index si existe (formato habitual en exports)
             if isinstance(df.columns, pd.MultiIndex):
                 # Intentamos unir los niveles o quedarnos con el más descriptivo
                 new_cols = []
@@ -993,7 +993,7 @@ def extract_info_from_path(path: str) -> Tuple[str, str, Optional[int]]:
             try:
                 from datetime import timedelta
                 dt = datetime(int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3)))
-                # Shifting 1 day forward to align Sunday (Amazon start) with Monday (ISO start)
+                # Shifting 1 day forward to align Sunday (week start) with Monday (ISO start)
                 # This makes Sun-Sat belong to the same ISO week
                 dt_shifted = dt + timedelta(days=1)
                 isoyear, isoweek, isoday = dt_shifted.isocalendar()
@@ -1053,7 +1053,7 @@ def create_professional_excel(df: pd.DataFrame, output_path: str,
         wb = Workbook()
         wb.remove(wb.active)
         
-        # --- PALETA DE COLORES AMAZON ---
+        # --- PALETA DE COLORES ---
         AMZ_DARK = '232F3E'
         AMZ_ORANGE = 'FF9900'
         AMZ_BLUE = '146EB4'
@@ -1438,7 +1438,7 @@ def get_db_connection(db_config: Optional[Dict] = None):
         if db_config and db_config.get('path'):
             db_path = db_config['path']
         else:
-            db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "amazon_quality.db")
+            db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scorecard.db")
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         return conn
@@ -2482,7 +2482,7 @@ def clean_database_duplicates(db_config: Optional[Dict] = None) -> Tuple[bool, i
 def _parse_station_kpis(text: str, errors: list) -> dict:
     """
     Extrae los KPIs de estación de la página 2 del PDF.
-    Probado contra el texto real extraído por pdfplumber del PDF oficial de Amazon.
+    Probado contra el texto real extraído por pdfplumber del PDF oficial semanal.
     
     Formato real del PDF (verificado):
       'Safe Driving Metric (FICO) 831|Fantastic Vehicle Audit (VSA) Compliance 100%|Fantastic'

@@ -130,7 +130,7 @@ cp .env.example .env
 streamlit run app.py
 ```
 
-Sin `secrets.toml` ni variables Postgres, la app arranca con **SQLite local** automáticamente. El archivo `amazon_quality.db` se crea en el directorio raíz.
+Sin `secrets.toml` ni variables Postgres, la app arranca con **SQLite local** automáticamente. El archivo `scorecard.db` se crea en el directorio raíz.
 
 ---
 

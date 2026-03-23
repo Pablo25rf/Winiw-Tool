@@ -1251,7 +1251,7 @@ class TestParsePdfRealV39(unittest.TestCase):
     def test_ok(self):
         self.assertTrue(self.res['ok'])
 
-    def test_centro_dma3(self):
+    def test_centro_ctr1(self):
         self.assertEqual(self.res['meta']['centro'], 'CTR1')
 
     def test_semana_w07(self):

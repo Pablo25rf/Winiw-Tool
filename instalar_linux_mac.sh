@@ -66,8 +66,8 @@ if [ -f "app.py" ]; then
 fi
 
 if [ -f "scorecard_engine.py" ]; then
-    cp scorecard_engine.py "amazon_scorecard_OLD_$TIMESTAMP.py"
-    print_info "Backup: scorecard_engine.py -> amazon_scorecard_OLD_$TIMESTAMP.py"
+    cp scorecard_engine.py "scorecard_engine_OLD_$TIMESTAMP.py"
+    print_info "Backup: scorecard_engine.py -> scorecard_engine_OLD_$TIMESTAMP.py"
 fi
 
 print_success "Backups creados"

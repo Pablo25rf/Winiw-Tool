@@ -47,7 +47,7 @@
 
 ### 🔑 ADMIN
 
-- Procesar archivos Amazon (CSV/Excel/PDF)
+- Procesar archivos de Logística (CSV/Excel/PDF)
 - Generar y descargar scorecards Excel
 - Ver histórico completo de todos los centros
 - Crear/eliminar/modificar usuarios JT
@@ -147,7 +147,7 @@ DELETE FROM login_attempts WHERE username = 'el_usuario';
 - **Backup antes de cambios importantes**:
 
 ```bash
-cp amazon_quality.db amazon_quality_backup_$(date +%Y%m%d).db
+cp scorecard.db scorecard_backup_$(date +%Y%m%d).db
 ```
 
 ---
@@ -156,7 +156,7 @@ cp amazon_quality.db amazon_quality_backup_$(date +%Y%m%d).db
 
 ```python
 import sqlite3
-conn = sqlite3.connect('amazon_quality.db')
+conn = sqlite3.connect('scorecard.db')
 
 # Ver todos los usuarios y roles
 print(conn.execute("SELECT username, role, active FROM users").fetchall())

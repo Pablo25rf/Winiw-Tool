@@ -21,7 +21,7 @@
 10. [Pestaña: Administración](#10-administracion)
 11. [Gestión de usuarios](#11-gestion-usuarios)
 12. [Errores frecuentes y soluciones](#12-errores-frecuentes)
-13. [Glosario de métricas Amazon](#13-glosario)
+13. [Glosario de métricas](#13-glosario)
 
 ---
 
@@ -170,7 +170,7 @@ Targets por defecto:
 
 - Score oficial, standing, ranking WoW
 - WHC%, DCR, DNR DPMO, LoR DPMO, FICO, POD con tiers
-- Focus Areas indicados por Amazon
+- Focus Areas indicados por el portal
 - Excepciones de horas de trabajo (WHC exceptions) con nombre de conductor
 
 ---
@@ -198,7 +198,7 @@ Todos (N) | 🛑 POOR (N) | ⚠️ FAIR (N) | 🥇 GREAT (N) | 💎 FANTASTIC (N
 - Mini-tendencia — últimos 6 scores
 - Métricas detalladas con barra vs target
 - Comparativa CSV vs PDF oficial si disponible
-- Focus Areas de Amazon
+- Focus Areas del portal
 
 ### 7.4 Paginación
 
@@ -272,18 +272,18 @@ Solo visible para `superadmin`:
 | Pantalla en blanco | Sesión caducada | Recarga y vuelve a entrar |
 | "Error de conexión" en sidebar | Supabase no responde | Espera 30 s y pulsa 🔄 Refrescar |
 | Datos no actualizados tras subir | Caché activa (TTL 5 min) | Pulsa 🔄 Refrescar Datos |
-| "No se pudo procesar el PDF" | Formato no reconocido | Verifica que es el PDF oficial semanal de Amazon |
+| "No se pudo procesar el PDF" | Formato no reconocido | Verifica que es el PDF oficial semanal correcto |
 | Conductor con métricas `—` | Archivo de esa métrica no subido | Sube el archivo y reprocesa el lote |
 | Login bloqueado | 5 intentos fallidos | Admin → Administración → Desbloquear |
 | "RuntimeError: QS_ADMIN_USER not set" | Variables de entorno no configuradas | Definir `QS_ADMIN_USER` y `QS_ADMIN_PASS` |
-| Score no coincide con PDF Amazon | CSV es semana completa; PDF puede ser parcial | Normal si el PDF es de mitad de semana |
+| Score no coincide con PDF oficial | CSV es semana completa; PDF puede ser parcial | Normal si el PDF es de mitad de semana |
 | BD vacía después de redeployar | SQLite local no persiste entre deploys | Usar Supabase en producción |
 | "bcrypt warning" en sidebar | bcrypt no instalado | Añadir `bcrypt>=4.1.0` a requirements.txt |
 | Columna `anio` faltante | BD antigua pre-v3.9 | Migración automática al arrancar — no hace falta nada manual |
 
 ---
 
-## 13. Glosario de métricas Amazon
+## 13. Glosario de métricas
 
 | Sigla | Nombre completo | Target |
 |-------|----------------|--------|

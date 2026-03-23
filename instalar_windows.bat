@@ -33,8 +33,8 @@ if exist app.py (
     copy app.py app_OLD_%date:~-4,4%%date:~-10,2%%date:~-7,2%.py >nul
 )
 if exist scorecard_engine.py (
-    echo Backup: scorecard_engine.py -^> amazon_scorecard_OLD_%date:~-4,4%%date:~-10,2%%date:~-7,2%.py
-    copy scorecard_engine.py amazon_scorecard_OLD_%date:~-4,4%%date:~-10,2%%date:~-7,2%.py >nul
+    echo Backup: scorecard_engine.py -^> scorecard_engine_OLD_%date:~-4,4%%date:~-10,2%%date:~-7,2%.py
+    copy scorecard_engine.py scorecard_engine_OLD_%date:~-4,4%%date:~-10,2%%date:~-7,2%.py >nul
 )
 echo [OK] Backups creados
 echo.

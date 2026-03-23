@@ -1720,7 +1720,7 @@ if tab_dsp:
 
             _all_parsed = st.session_state.get('_dsp_all_parsed', [])
             _tier_color = {'Fantastic': '🔵', 'Great': '🟢', 'Fair': '🟠', 'Poor': '🔴'}
-            _AMAZON_COLORS = {
+            _TIER_COLORS = {
                 'Fantastic': '#0F6CBD',
                 'Great':     '#067D50',
                 'Fair':      '#FF9900',
@@ -1728,12 +1728,12 @@ if tab_dsp:
             }
 
             def _amz_badge(tier: str) -> str:
-                c = _AMAZON_COLORS.get(tier, '#6c757d')
+                c = _TIER_COLORS.get(tier, '#6c757d')
                 return (f'<span style="background:{c};color:#fff;padding:2px 8px;'
                         f'border-radius:3px;font-size:.78em;font-weight:600">{tier or "—"}</span>')
 
             def _block_hdr(icon: str, title: str, tier: str | None = None) -> str:
-                c = _AMAZON_COLORS.get(tier, '#495057')
+                c = _TIER_COLORS.get(tier, '#495057')
                 badge = f' {_amz_badge(tier)}' if tier else ''
                 return (f'<div style="background:#f0f2f6;border-left:4px solid {c};'
                         f'padding:6px 12px;border-radius:4px;margin:12px 0 4px 0;font-weight:600">'

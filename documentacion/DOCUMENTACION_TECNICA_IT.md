@@ -68,7 +68,7 @@
 ┌───────▼───────┐                ┌────────▼────────┐
 │  PostgreSQL   │                │  SQLite          │
 │  (Supabase)   │                │  (desarrollo)    │
-│  producción   │                │  amazon_quality  │
+│  producción   │                │  scorecard  │
 │               │                │  .db             │
 └───────────────┘                └──────────────────┘
 ```
@@ -143,7 +143,7 @@ CREATE TABLE users (
     centro               VARCHAR(20)     -- v3.9: asignación de centro para JTs
 );
 
--- KPIs de estación (del PDF oficial Amazon)
+-- KPIs de estación (del PDF oficial)
 CREATE TABLE station_scorecards (
     id              SERIAL PRIMARY KEY,
     semana          VARCHAR(10),
@@ -288,7 +288,7 @@ Streamlit UI           → scorecard, dashboard, histórico
 ```
 
 ```
-PDF oficial Amazon
+PDF oficial
         │
         ▼
 parse_dsp_scorecard_pdf()
@@ -322,7 +322,7 @@ update_drivers_from_pdf() → actualiza dcr_oficial, pod_oficial… en scorecard
 | `merge_data_smart(...)` | Merge de todas las fuentes con left join por driver_id |
 | `calculate_score_v3_robust(row, targets)` | Score ponderado para una fila → 🌟 FANTASTIC+ (≥93) · 💎 FANTASTIC (≥90) · 🥇 GREAT (≥80) · ⚠️ FAIR (≥60) · 🛑 POOR (<60) |
 | `save_to_database(df, week, center, ...)` | Upsert masivo con executemany |
-| `parse_dsp_scorecard_pdf(pdf_bytes)` | Parseo completo del PDF oficial Amazon |
+| `parse_dsp_scorecard_pdf(pdf_bytes)` | Parseo completo del PDF oficial |
 | `save_station_scorecard(station_data, ...)` | Guarda KPIs de estación |
 | `save_wh_exceptions(wh_df, ...)` | Guarda excepciones WHC con lookup de driver_name |
 | `get_station_scorecards(db_config)` | SELECT con LEFT JOIN wh_count |
@@ -358,7 +358,7 @@ update_drivers_from_pdf() → actualiza dcr_oficial, pod_oficial… en scorecard
 Funciones pensadas para ser llamadas desde tests, scripts externos o la propia app:
 
 ```python
-import amazon_scorecard_ultra_robust_v3_FINAL as sc
+import scorecard_engine as sc
 
 db = {'type': 'sqlite', 'path': '/ruta/mi.db'}
 
@@ -396,8 +396,8 @@ Ver [DEPLOY.md](DEPLOY.md) para la guía paso a paso.
 
 ```bash
 # Clonar
-git clone https://github.com/Pablo25rf/Winiw-Tool.git
-cd Winiw-Tool
+git clone https://github.com/Pablo25rf/PRF_25-Tool.git
+cd PRF_25-Tool
 
 # Entorno virtual
 python -m venv .venv && source .venv/bin/activate
@@ -447,14 +447,14 @@ Desde la app: **Administración → Zona Superadmin → Ver Logs**.
 ### Backup de SQLite (local)
 
 ```bash
-cp amazon_quality.db amazon_quality_backup_$(date +%Y%m%d_%H%M).db
+cp scorecard.db scorecard_backup_$(date +%Y%m%d_%H%M).db
 ```
 
 ### Mantenimiento de BD desde Python
 
 ```python
-import amazon_scorecard_ultra_robust_v3_FINAL as sc
-db = {'type': 'sqlite', 'path': 'amazon_quality.db'}
+import scorecard_engine as sc
+db = {'type': 'sqlite', 'path': 'scorecard.db'}
 ok, n = sc.run_maintenance(db)
 print(f"Mantenimiento OK: {n} registros afectados")
 ```
@@ -475,7 +475,7 @@ print(f"Mantenimiento OK: {n} registros afectados")
 
 ### La BD de tests y la de producción son la misma
 
-`get_db_connection()` respeta `db_config['path']` desde v3.9. Si no se pasa `path`, usa el archivo por defecto `amazon_quality.db`. Los tests siempre crean una BD temporal con `tempfile.mktemp()`.
+`get_db_connection()` respeta `db_config['path']` desde v3.9. Si no se pasa `path`, usa el archivo por defecto `scorecard.db`. Los tests siempre crean una BD temporal con `tempfile.mktemp()`.
 
 ### Rate limiting no funciona en multi-worker
 
@@ -483,7 +483,7 @@ Asegúrate de usar PostgreSQL/Supabase en producción. Con SQLite la concurrenci
 
 ### Score difiere entre CSV y PDF
 
-El motor CSV calcula con los datos brutos de los archivos semanales. El PDF oficial de Amazon puede incluir datos de semanas parciales o con correcciones. Ambas fuentes se guardan en columnas separadas (`score` vs `dcr_oficial`, `pod_oficial`, etc.).
+El motor CSV calcula con los datos brutos de los archivos semanales. El PDF oficial puede incluir datos de semanas parciales o con correcciones. Ambas fuentes se guardan en columnas separadas (`score` vs `dcr_oficial`, `pod_oficial`, etc.).
 
 ### `psycopg2.OperationalError: connection refused`
 
