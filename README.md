@@ -121,4 +121,6 @@ Ver [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
-© 2026 [@pablo25rf](https://github.com/pablo25rf) · Todos los derechos reservados.
+© 2026 Winiw · @pablo25rf · Todos los derechos reservados.
+
+Este software es propietario. Queda prohibido su uso, copia o distribución sin autorización escrita del titular. Ver [LICENSE](LICENSE).

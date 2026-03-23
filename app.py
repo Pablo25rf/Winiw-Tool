@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Winiw — pablo25rf. Todos los derechos reservados.
+# Software propietario. Prohibido su uso, copia o distribución sin autorización escrita.
+# Ver LICENSE en la raíz del proyecto.
 """
 Quality Scorecard — app.py v3.9
 ======================================
