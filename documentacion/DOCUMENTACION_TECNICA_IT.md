@@ -1,4 +1,4 @@
-# 📘 Documentación Técnica IT — Winiw Quality Scorecard v3.9
+# 📘 Documentación Técnica IT — Quality Scorecard v3.9
 
 **Versión:** 3.9  
 **Fecha:** Marzo 2026  
@@ -26,7 +26,7 @@
 
 ## 1. Descripción general
 
-**Winiw Quality Scorecard** automatiza el procesamiento semanal de métricas de calidad de conductores Amazon DSP. Procesa hasta 7 fuentes de datos heterogéneas (CSV, Excel, HTML, PDF), calcula scores ponderados por conductor y publica los resultados en una interfaz web multi-rol.
+**Quality Scorecard** automatiza el procesamiento semanal de métricas de calidad de conductores Logística. Procesa hasta 7 fuentes de datos heterogéneas (CSV, Excel, HTML, PDF), calcula scores ponderados por conductor y publica los resultados en una interfaz web multi-rol.
 
 ### Reducción de carga operativa
 
@@ -320,7 +320,7 @@ update_drivers_from_pdf() → actualiza dcr_oficial, pod_oficial… en scorecard
 | `process_fdps(df)` | Parsea FDPS |
 | `process_daily_report(df)` | Parsea daily report HTML |
 | `merge_data_smart(...)` | Merge de todas las fuentes con left join por driver_id |
-| `calculate_score_v3_robust(row, targets)` | Score ponderado para una fila |
+| `calculate_score_v3_robust(row, targets)` | Score ponderado para una fila → 🌟 FANTASTIC+ (≥93) · 💎 FANTASTIC (≥90) · 🥇 GREAT (≥80) · ⚠️ FAIR (≥60) · 🛑 POOR (<60) |
 | `save_to_database(df, week, center, ...)` | Upsert masivo con executemany |
 | `parse_dsp_scorecard_pdf(pdf_bytes)` | Parseo completo del PDF oficial Amazon |
 | `save_station_scorecard(station_data, ...)` | Guarda KPIs de estación |
@@ -522,4 +522,4 @@ Verifica que el host en `secrets.toml` usa puerto **6543** (PgBouncer) y no 5432
 
 ---
 
-*Winiw Quality Scorecard v3.9 · [@pablo25rf](https://github.com/pablo25rf) · Marzo 2026*
+*Quality Scorecard v3.9 · [@pablo25rf](https://github.com/pablo25rf) · Marzo 2026*

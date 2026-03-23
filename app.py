@@ -1,5 +1,5 @@
 """
-Winiw Quality Scorecard — app.py v3.9
+Quality Scorecard — app.py v3.9
 ======================================
 v3.3: Dashboard rediseñado, caché, JT restrictions, DSP PDF parser, WoW deltas
 v3.4: SQL injection fix, hardcoding eliminado, caché selectivo, audit log, validaciones
@@ -71,7 +71,7 @@ except Exception:
 # CONFIG INICIAL
 # ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Winiw Quality Scorecard",
+    page_title="Quality Scorecard",
     layout="wide",
     page_icon="🛡️",
     initial_sidebar_state="expanded"
@@ -811,8 +811,8 @@ def check_login() -> bool:
         st.markdown("""
         <div style='text-align:center;padding:3rem 0 1rem'>
             <div style='font-size:3rem'>🛡️</div>
-            <h1 style='margin:0.5rem 0'>Winiw Quality Scorecard</h1>
-            <p style='color:#6c757d'>Amazon DSP · Calidad</p>
+            <h1 style='margin:0.5rem 0'>Quality Scorecard</h1>
+            <p style='color:#6c757d'>Logística · Calidad</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -1020,8 +1020,8 @@ st.markdown("""
 <div style='display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem'>
     <span style='font-size:2rem'>🛡️</span>
     <div>
-        <h2 style='margin:0'>Winiw Quality Scorecard</h2>
-        <p style='margin:0;color:#6c757d;font-size:0.9em'>Amazon DSP</p>
+        <h2 style='margin:0'>Quality Scorecard</h2>
+        <p style='margin:0;color:#6c757d;font-size:0.9em'>Logística</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -2721,7 +2721,7 @@ with tab_excel:
 
                     df_trend = cached_driver_trend(_DB_KEY, db_config, sel_driver_id, sc_center)
 
-                    if df_trend.empty or len(df_trend) < 1:
+                    if df_trend.empty or len(df_trend) < 2:
                         st.info("ℹ️ Este conductor solo tiene datos de la semana actual. Necesitas al menos 2 semanas para ver tendencia.")
                     else:
                         # ── Header del conductor ──────────────────────────────
@@ -3756,7 +3756,7 @@ if tab_admin:
                         with st.spinner("Enviando..."):
                             ok_smtp = scorecard.send_alert_email(
                                 smtp_cfg_t, alert_mail_t,
-                                "[Test] Winiw Quality Scorecard — SMTP OK",
+                                "[Test] Quality Scorecard — SMTP OK",
                                 "<div style='font-family:Arial'><h3>✅ SMTP correcto</h3>"
                                 "<p>Si recibes este email, las alertas automáticas funcionarán.</p></div>"
                             )
@@ -3971,7 +3971,7 @@ st.markdown("---")
 st.markdown("""
 <div style='display:flex;justify-content:space-between;align-items:center;
             color:#6c757d;font-size:0.8em'>
-    <span>🛡️ Winiw · Amazon DSP</span>
+    <span>🛡️ Quality Scorecard · <a href='https://github.com/pablo25rf' target='_blank' style='color:#6c757d;text-decoration:none'>@pablo25rf</a></span>
     <span></span>
     <span>🏆 Lideres en calidad</span>
 </div>

@@ -5,7 +5,7 @@ Sistema de procesamiento y análisis de métricas de calidad para conductores Am
 Soporta PostgreSQL y SQLite con auto-migraciones y validaciones robustas.
 
 Versión: 3.9
-Fecha: Marzo 2025
+Fecha: Marzo 2026
 """
 
 import pandas as pd
@@ -1133,7 +1133,7 @@ def create_professional_excel(df: pd.DataFrame, output_path: str,
         # --- DISTRIBUCIÓN DE CALIFICACIONES ---
         ws_summary.cell(row=9, column=2, value="ESTADO DE LA FLOTA").font = Font(bold=True, size=11)
         dist_row = 10
-        dist_colors = {'💎 FANTASTIC': '4CAF50', '🥇 GREAT': '8BC34A', '⚠️ FAIR': 'FFC107', '🛑 POOR': 'F44336'}
+        dist_colors = {'🌟 FANTASTIC+': '7c3aed', '💎 FANTASTIC': '4CAF50', '🥇 GREAT': '8BC34A', '⚠️ FAIR': 'FFC107', '🛑 POOR': 'F44336'}
         
         for i, (cat, color) in enumerate(dist_colors.items()):
             count = int(calif_counts.get(cat, 0))
@@ -1534,7 +1534,7 @@ def update_user_password(username: str, new_hash: str, db_config: dict) -> bool:
         with db_connection(db_config) as conn:
             cursor = conn.cursor()
             q = ("UPDATE users SET password = %s, must_change_password = 0 WHERE username = %s"
-                 if db_config.get('type') == 'postgresql' else
+                 if db_config and db_config.get('type') == 'postgresql' else
                  "UPDATE users SET password = ?, must_change_password = 0 WHERE username = ?")
             cursor.execute(q, (new_hash, username))
             conn.commit()
@@ -2131,9 +2131,6 @@ def week_to_date(week_str: str, year: int = None) -> str:
             year = datetime.now().year
             if week_num > 45:
                 year -= 1
-            elif week_num < 8:
-                pass
-
         # Cálculo ISO: 4 de enero es siempre semana 1
         d = datetime(year, 1, 4)
         # Retroceder al lunes de esa semana y saltar X semanas
@@ -2149,7 +2146,7 @@ def _safe_float(v, default=0.0):
 
 def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Optional[Dict] = None,
                      uploaded_by: str = "System", clean_first: bool = True,
-                     year: Optional[int] = None) -> bool:
+                     year: Optional[int] = None) -> Tuple[bool, str]:
     """Guarda o actualiza los datos en la base de datos (SQLite o PostgreSQL)"""
     try:
         # Normalizar semana: W5 → W05, W9 → W09 (evita inconsistencias en ORDER BY y filtros)
@@ -2314,7 +2311,7 @@ def refresh_center_views(db_config=None) -> int:
             """)
             old_views = [r[0] for r in cursor.fetchall()]
             for old_view in old_views:
-                cursor.execute(f'DROP VIEW IF EXISTS {old_view}')
+                cursor.execute(sql.SQL('DROP VIEW IF EXISTS {}').format(sql.Identifier(old_view)))
 
             # Crear vistas nuevas con nombre DAS_{CENTRO}
             cursor.execute("SELECT DISTINCT centro FROM scorecards")
@@ -2323,8 +2320,8 @@ def refresh_center_views(db_config=None) -> int:
                 clean_name = "".join(ch if ch.isalnum() else "_" for ch in c.upper())[:50]
                 view_name  = f"DAS_{clean_name}"
                 cursor.execute(
-                    f'CREATE OR REPLACE VIEW {view_name} AS '
-                    f'SELECT * FROM scorecards WHERE centro = %s', (c,)
+                    sql.SQL('CREATE OR REPLACE VIEW {} AS SELECT * FROM scorecards WHERE centro = %s')
+                    .format(sql.Identifier(view_name)), (c,)
                 )
             conn.commit()
         logger.info(f"refresh_center_views: {len(centros)} vistas actualizadas (DAS_{{CENTRO}})")
@@ -2460,9 +2457,14 @@ def clean_database_duplicates(db_config: Optional[Dict] = None) -> Tuple[bool, i
         logger.error(f"clean_database_duplicates error: {e}")
         return False, 0
     finally:
-        try:
-            if conn: conn.close()
-        except Exception: pass
+        if conn:
+            try:
+                if db_config and db_config.get('type') == 'postgresql' and _PG_POOL and not _PG_POOL.closed:
+                    _PG_POOL.putconn(conn)
+                else:
+                    conn.close()
+            except Exception:
+                pass
 
 # NOTE: Procesamiento por lotes disponible en:
 #   - App Streamlit: Tab Procesamiento → Importación masiva ZIP
@@ -2760,6 +2762,10 @@ def parse_dsp_scorecard_pdf(pdf_bytes: bytes) -> dict:
 
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+
+            if not pdf.pages:
+                result['errors'].append("PDF sin páginas")
+                return result
 
             # ── PÁGINA 1: Meta — centro, semana, año ────────────────────────
             p1 = pdf.pages[0].extract_text() or ""
@@ -3478,7 +3484,7 @@ def check_and_send_alerts(week: str, center: str,
                     <tbody>{rows_html}</tbody>
                 </table>
                 <p style='color:#6c757d;font-size:0.85em;margin-top:20px'>
-                    Este mensaje ha sido generado automáticamente por Winiw Quality Scorecard.
+                    Este mensaje ha sido generado automáticamente por Quality Scorecard.
                 </p>
             </div>
         </div>

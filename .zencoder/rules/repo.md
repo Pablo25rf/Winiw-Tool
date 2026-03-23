@@ -3,10 +3,10 @@ description: Repository Information Overview
 alwaysApply: true
 ---
 
-# Winiw Quality Scorecard v3.9 Information
+# Quality Scorecard v3.9 Information
 
 ## Summary
-A comprehensive quality management system for Amazon DSP designed to process weekly CSV and PDF data. It automatically calculates weighted performance scores for drivers based on 8 key metrics (DNR, DCR, POD, CC, RTS, CDF, FDPS, FS) and generates real-time scorecards and rankings. The application features a role-based dashboard, PostgreSQL/Supabase production database support with SQLite failback for development, and automated Power BI export capabilities.
+A comprehensive quality management system for Logística designed to process weekly CSV and PDF data. It automatically calculates weighted performance scores for drivers based on 8 key metrics (DNR, DCR, POD, CC, RTS, CDF, FDPS, FS) and generates real-time scorecards and rankings. The application features a role-based dashboard, PostgreSQL/Supabase production database support with SQLite failback for development, and automated Power BI export capabilities.
 
 ## Structure
 - `app.py`: Main Streamlit web application interface and user management.
@@ -45,7 +45,7 @@ streamlit run app.py
 ## Docker
 
 **Dockerfile**: `Dockerfile`
-**Image**: `winiw-scorecard` (suggested tag)
+**Image**: `quality-scorecard` (suggested tag)
 **Configuration**: 
 - **Base Image**: `python:3.11-slim`
 - **Port**: 8501 (Streamlit default)

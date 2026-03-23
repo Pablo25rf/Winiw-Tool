@@ -1,4 +1,4 @@
-# 👑 GUÍA SUPERADMIN — Winiw Quality Scorecard v3.9
+# 👑 GUÍA SUPERADMIN — Quality Scorecard v3.9
 
 > Autor: [@pablo25rf](https://github.com/pablo25rf)
 
@@ -192,4 +192,4 @@ conn.close()
 
 ---
 
-*Winiw Quality Scorecard v3.9 · [@pablo25rf](https://github.com/pablo25rf) · Marzo 2026*
+*Quality Scorecard v3.9 · [@pablo25rf](https://github.com/pablo25rf) · Marzo 2026*

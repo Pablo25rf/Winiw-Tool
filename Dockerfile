@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 # Metadatos
 LABEL maintainer="Pablo25rf"
-LABEL description="Winiw Quality Scorecard v3.9 — Amazon DSP"
+LABEL description="Quality Scorecard v3.9 — Logística"
 LABEL version="3.9.3"
 
 # Variables de entorno del sistema

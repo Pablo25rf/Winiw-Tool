@@ -134,7 +134,7 @@ REM Preguntar si desea ejecutar la aplicacion
 set /p EJECUTAR="Deseas ejecutar la aplicacion ahora? (S/N): "
 if /i "%EJECUTAR%"=="S" (
     echo.
-    echo Iniciando Winiw Quality Scorecard...
+    echo Iniciando Quality Scorecard...
     echo Presiona Ctrl+C para detener
     echo.
     streamlit run app.py

@@ -1,4 +1,4 @@
-# 📋 Manual de Operación — Winiw Quality Scorecard v3.9
+# 📋 Manual de Operación — Quality Scorecard v3.9
 
 **Para:** Administradores y Jefes de Tráfico  
 **Versión del sistema:** 3.9  
@@ -84,7 +84,7 @@ El sidebar muestra:
 ## 3. Flujo de trabajo semanal — Admin
 
 ```
-1. Descargar archivos de Amazon DSP Portal
+1. Descargar archivos de Logística Portal
 2. Pestaña "🚀 Procesamiento" → subir archivos → procesar lote
 3. Pestaña "📋 DSP Scorecard PDF" → subir PDF oficial → revisar tabla → guardar todos
 4. Revisar "📊 Scorecard" para verificar datos
@@ -188,7 +188,7 @@ Usa el **sidebar** para seleccionar centro y semana.
 ### 7.2 Filtrar conductores
 
 ```
-Todos (N) | 🛑 POOR (N) | ⚠️ FAIR (N) | 🥇 GREAT (N) | 💎 FANTASTIC (N)
+Todos (N) | 🛑 POOR (N) | ⚠️ FAIR (N) | 🥇 GREAT (N) | 💎 FANTASTIC (N) | 🌟 FANTASTIC+ (N)
 ```
 
 ### 7.3 Tarjeta por conductor
@@ -304,11 +304,12 @@ Solo visible para `superadmin`:
 
 | Calificación | Score |
 |--------------|-------|
-| 💎 FANTASTIC | ≥ 90 |
+| 🌟 FANTASTIC+ | ≥ 93 |
+| 💎 FANTASTIC | 90–92 |
 | 🥇 GREAT | 80–89 |
 | ⚠️ FAIR | 60–79 |
 | 🛑 POOR | < 60 |
 
 ---
 
-*Winiw Quality Scorecard v3.9 · [@pablo25rf](https://github.com/pablo25rf) · Marzo 2026*
+*Quality Scorecard v3.9 · [@pablo25rf](https://github.com/pablo25rf) · Marzo 2026*

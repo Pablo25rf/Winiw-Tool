@@ -1,4 +1,4 @@
-# Winiw Quality Scorecard — Guía de Deploy
+# Quality Scorecard — Guía de Deploy
 ## De cero a producción en Streamlit Cloud + Supabase
 
 > Autor: [@pablo25rf](https://github.com/pablo25rf)
@@ -9,7 +9,7 @@
 
 - Cuenta en [Streamlit Cloud](https://streamlit.io/cloud) (gratuita)
 - Cuenta en [Supabase](https://supabase.com) (gratuita hasta 500 MB)
-- Repositorio en GitHub: `github.com/Pablo25rf/Winiw-Tool`
+- Repositorio en GitHub: `github.com/Pablo25rf/Quality-Scorecard`
 - Python 3.10+ local para pruebas
 
 ---
@@ -17,7 +17,7 @@
 ## 1. Estructura de ficheros
 
 ```
-Winiw-Tool/
+Quality-Scorecard/
 ├── app.py                                        # Aplicación principal
 ├── amazon_scorecard_ultra_robust_v3_FINAL.py     # Motor de procesamiento
 ├── requirements.txt                              # Dependencias Python
@@ -86,8 +86,8 @@ POSTGRES_PASSWORD=<tu_password>
 
 ### 4.1 Subir el código a GitHub
 ```bash
-git clone https://github.com/Pablo25rf/Winiw-Tool.git
-cd Winiw-Tool
+git clone https://github.com/Pablo25rf/Quality-Scorecard.git
+cd Quality-Scorecard
 # ... hacer cambios ...
 git add .
 git commit -m "descripción"
@@ -96,13 +96,13 @@ git push origin main
 
 ### 4.2 Conectar en Streamlit Cloud
 1. [share.streamlit.io](https://share.streamlit.io) → **New app**
-2. Repositorio: `Pablo25rf/Winiw-Tool`
+2. Repositorio: `Pablo25rf/Quality-Scorecard`
 3. Branch: `main`
 4. Main file path: `app.py`
 5. Clic en **Advanced settings** antes de Deploy
 
 ### 4.3 Configurar los Secrets
-En **Advanced settings → Secrets**, usa el formato del archivo `secrets.toml.example` con tus credenciales reales. El bloque `[postgres]` configura la base de datos; el bloque `[env]` configura las credenciales de acceso a la app.
+En **Advanced settings → Secrets**, usa el formato del archivo `secrets.toml.example` con tus credenciales reales. El bloque `[postgres]` configura la base de datos; el bloque `[app]` configura las credenciales de acceso a la app.
 
 6. Clic en **Deploy**
 
@@ -120,8 +120,8 @@ En **Advanced settings → Secrets**, usa el formato del archivo `secrets.toml.e
 ## 6. Entorno local (desarrollo)
 
 ```bash
-git clone https://github.com/Pablo25rf/Winiw-Tool.git
-cd Winiw-Tool
+git clone https://github.com/Pablo25rf/Quality-Scorecard.git
+cd Quality-Scorecard
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
@@ -140,7 +140,7 @@ Sin `secrets.toml` ni variables Postgres, la app arranca con **SQLite local** au
 WINIW_ADMIN_USER=test WINIW_ADMIN_PASS=test python -m unittest test_scorecard_v39 -v
 ```
 
-Resultado esperado: **159 tests OK, 14 skipped** (los skipped requieren el PDF real de DMA3 — no son bloqueantes para CI).
+Resultado esperado: **175 tests OK, 13 skipped** (los skipped requieren el PDF real de DMA3 — no son bloqueantes para CI).
 
 ---
 
@@ -195,4 +195,4 @@ docker run -p 8501:8501 --env-file .env winiw-scorecard
 
 ---
 
-*Winiw Quality Scorecard · [@pablo25rf](https://github.com/pablo25rf) · Marzo 2026*
+*Quality Scorecard · [@pablo25rf](https://github.com/pablo25rf) · Marzo 2026*

@@ -1,6 +1,6 @@
 """
-test_scorecard_v39.py - Suite de tests para Winiw Quality Scorecard v3.9
-Merge completo: 117 tests v3.7 + 44 tests v3.9 = 161 tests
+test_scorecard_v39.py - Suite de tests para Quality Scorecard v3.9
+Merge completo: 117 tests v3.7 + 58 tests v3.9 = 175 tests
 Ejecutar: python -m unittest test_scorecard_v39 -v
 No toca la BD de produccion - usa ficheros SQLite temporales.
 """
@@ -469,6 +469,12 @@ class TestCalculateScore(unittest.TestCase):
         cal2, _, _ = sc.calculate_score_v3_robust(self._terrible(), self.TARGETS)
         self.assertIn(cal2, valid)
 
+    def test_fantastic_plus_tier(self):
+        """Perfect driver (no deductions) must reach FANTASTIC+ (score ≥ 93)."""
+        cal, _, score = sc.calculate_score_v3_robust(self._perfect(), self.TARGETS)
+        self.assertGreaterEqual(score, 93, f"Expected ≥93 but got {score}")
+        self.assertEqual(cal, "🌟 FANTASTIC+")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 11. process_concessions
@@ -741,7 +747,8 @@ class TestSaveToDatabase(unittest.TestCase):
         return pd.DataFrame(rows)
 
     def test_save_returns_true(self):
-        self.assertTrue(sc.save_to_database(self._df(), 'W07', 'DIC1', self.db))
+        ok, err = sc.save_to_database(self._df(), 'W07', 'DIC1', self.db)
+        self.assertTrue(ok, f"save_to_database falló: {err}")
 
     def test_save_persists_rows(self):
         sc.save_to_database(self._df(3), 'W07', 'DIC1', self.db)
@@ -1225,7 +1232,8 @@ class TestRegresionesV39(unittest.TestCase):
         self.assertIn('wh_exceptions', src)
 
     def test_version_motor_es_v39(self):
-        src = open(sc.__file__, encoding='utf-8').read()[:300]
+        with open(sc.__file__, encoding='utf-8') as _f:
+            src = _f.read()[:300]
         self.assertIn('v3.9', src)
 
 
@@ -1284,6 +1292,50 @@ class TestParsePdfRealV39(unittest.TestCase):
         for c in ('driver_id', 'entregados_oficial', 'dcr_oficial',
                   'pod_oficial', 'cc_oficial', 'cdf_dpmo_oficial'):
             self.assertIn(c, cols)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 29. extract_info_from_path — week, center, year extraction
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestExtractInfoFromPath(unittest.TestCase):
+
+    def test_standard_week_and_center(self):
+        week, center, year = sc.extract_info_from_path(
+            "/datos/ES-TDSL-DIC1-W05-2025.pdf")
+        self.assertEqual(week, "W05")
+        self.assertEqual(center, "DIC1")
+        self.assertEqual(year, 2025)
+
+    def test_year_fallback_when_no_year_in_path(self):
+        """When filename has no year, year must default to current year."""
+        week, center, year = sc.extract_info_from_path(
+            "/datos/DMA3-W07-scorecard.pdf")
+        self.assertEqual(year, datetime.now().year)
+
+    def test_empty_path_returns_defaults(self):
+        week, center, year = sc.extract_info_from_path("")
+        self.assertEqual(week, "N/A")
+        self.assertEqual(center, "TDSL")
+        self.assertIsNone(year)
+
+    def test_none_path_returns_defaults(self):
+        week, center, year = sc.extract_info_from_path(None)
+        self.assertEqual(week, "N/A")
+        self.assertEqual(center, "TDSL")
+        self.assertIsNone(year)
+
+    def test_week_out_of_range_ignored(self):
+        """Week number 0 and >53 must not produce a valid Wxx."""
+        week_low, _, _ = sc.extract_info_from_path("/datos/DMA3-W00-2025.pdf")
+        week_high, _, _ = sc.extract_info_from_path("/datos/DMA3-W54-2025.pdf")
+        self.assertEqual(week_low, "N/A")
+        self.assertEqual(week_high, "N/A")
+
+    def test_center_fallback_tdsl(self):
+        """No center pattern → TDSL."""
+        _, center, _ = sc.extract_info_from_path("/datos/W07-2025.pdf")
+        self.assertEqual(center, "TDSL")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

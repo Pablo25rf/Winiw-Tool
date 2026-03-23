@@ -1,4 +1,4 @@
-# Guía Power BI — Winiw Quality Scorecard
+# Guía Power BI — Quality Scorecard
 ### Versión God Tier · Completa · Lista para Producción
 
 > Autor: [@pablo25rf](https://github.com/pablo25rf)
@@ -465,6 +465,7 @@ RETURN
 
 ```dax
 // ─── Conteos ─────────────────────────────────────────────────────────────────
+N Fantastic Plus = CALCULATE(COUNTROWS(scorecards), scorecards[calificacion] = "🌟 FANTASTIC+")
 N Fantastic = CALCULATE(COUNTROWS(scorecards), scorecards[calificacion] = "💎 FANTASTIC")
 N Great     = CALCULATE(COUNTROWS(scorecards), scorecards[calificacion] = "🥇 GREAT")
 N Fair      = CALCULATE(COUNTROWS(scorecards), scorecards[calificacion] = "⚠️ FAIR")
@@ -953,13 +954,13 @@ Línea de referencia en 80: color `#63BE7B`, estilo discontinuo, etiqueta "Meta:
 
 ---
 
-## PASO 7 — Tema Amazon/Winiw JSON
+## PASO 7 — Tema Logística JSON
 
 Guardar como `tema_winiw_amazon.json` e importar con **Ver → Temas → Examinar temas**:
 
 ```json
 {
-  "name": "Winiw Amazon Quality",
+  "name": "Logistics Quality",
   "dataColors": [
     "#FF9900",
     "#146EB4",
@@ -1151,7 +1152,7 @@ Power BI Service → **Exportar → PDF** — genera un snapshot estático del i
 - [ ] Formato condicional DNR: rojo >1650, amarillo 833-1650, verde <833
 - [ ] Formato condicional DCR/POD: rojo <99%, amarillo 99-99.5%, verde >=99.5%
 - [ ] Formato condicional WHC: rojo <85%, amarillo 85-95%, verde >=95%
-- [ ] Tema Amazon/Winiw importado
+- [ ] Tema Logística importado
 - [ ] Línea de referencia 80 en gráfico Score
 
 ### Publicación
@@ -1207,7 +1208,7 @@ Power BI Service → **Exportar → PDF** — genera un snapshot estático del i
 - Revisar que las relaciones están activas en el modelo
 
 **"Los emojis de calificación no coinciden"**
-- Los valores en BD son exactamente: `"💎 FANTASTIC"`, `"🥇 GREAT"`, `"⚠️ FAIR"`, `"🛑 POOR"` (con espacio después del emoji)
+- Los valores en BD son exactamente: `"🌟 FANTASTIC+"`, `"💎 FANTASTIC"`, `"🥇 GREAT"`, `"⚠️ FAIR"`, `"🛑 POOR"` (con espacio después del emoji)
 - Copiar y pegar desde aquí directamente en el código DAX
 
 **"Conductores POOR Acumulado devuelve 0"**
@@ -1215,4 +1216,4 @@ Power BI Service → **Exportar → PDF** — genera un snapshot estático del i
 
 ---
 
-*Winiw Quality Scorecard · [@pablo25rf](https://github.com/pablo25rf) · Marzo 2026*
+*Quality Scorecard · [@pablo25rf](https://github.com/pablo25rf) · Marzo 2026*

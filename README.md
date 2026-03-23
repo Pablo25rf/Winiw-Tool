@@ -1,6 +1,6 @@
-# Winiw Quality Scorecard
+# Quality Scorecard
 
-Herramienta de gestión de calidad para operaciones Amazon DSP. Procesa los datos semanales de los centros, calcula el score de cada conductor y genera scorecards automáticos con visualización en tiempo real.
+Herramienta de gestión de calidad para operaciones de Logística. Procesa los datos semanales de los centros, calcula el score de cada conductor y genera scorecards automáticos con visualización en tiempo real.
 
 > **Autor:** [@pablo25rf](https://github.com/pablo25rf)
 
@@ -8,9 +8,9 @@ Herramienta de gestión de calidad para operaciones Amazon DSP. Procesa los dato
 
 ## ¿Qué hace?
 
-- Procesa automáticamente los archivos semanales de Amazon DSP (CSVs de concesiones, calidad, excepciones WHC y el PDF de scorecard oficial)
+- Procesa automáticamente los archivos semanales de Logística (CSVs de concesiones, calidad, excepciones WHC y el PDF de scorecard oficial)
 - Calcula un **score ponderado por conductor** con 8 métricas: DNR, DCR, POD, CC, RTS, CDF, FDPS y Fantásticos
-- Clasifica a cada conductor en cuatro niveles: 💎 FANTASTIC · 🥇 GREAT · ⚠️ FAIR · 🛑 POOR
+- Clasifica a cada conductor en cinco niveles: 🌟 FANTASTIC+ · 💎 FANTASTIC · 🥇 GREAT · ⚠️ FAIR · 🛑 POOR
 - Muestra un **dashboard ejecutivo** con ranking de centros, tendencia semanal y distribución de niveles
 - Mantiene un **histórico completo** filtrable y exportable
 - Gestiona **usuarios con roles** (Superadmin / Admin / JT) con control de acceso por centro
@@ -52,7 +52,7 @@ streamlit run app.py
 
 La app requiere dos variables de entorno para arrancar (credenciales del superadmin inicial). Se configuran en el archivo `.env` — ver `.env.example` como plantilla.
 
-Para conectar con PostgreSQL/Supabase en producción, copia `.streamlit/secrets.toml.example` a `.streamlit/secrets.toml` y rellena las credenciales de la base de datos. Sin este archivo la app usa SQLite local automáticamente.
+Para conectar con PostgreSQL/Supabase en producción, copia `secrets.toml.example` a `.streamlit/secrets.toml` y rellena las credenciales de la base de datos. Sin este archivo la app usa SQLite local automáticamente.
 
 ---
 
@@ -89,13 +89,13 @@ docker run -p 8501:8501 --env-file .env winiw-scorecard
 ## Estructura del proyecto
 
 ```
-Winiw-Tool/
+Quality-Scorecard/
 ├── app.py                                    # Interfaz Streamlit
 ├── amazon_scorecard_ultra_robust_v3_FINAL.py # Motor de procesamiento
 ├── requirements.txt
 ├── .env.example
+├── secrets.toml.example                      # Copiar a .streamlit/secrets.toml
 ├── .streamlit/
-│   └── secrets.toml.example
 ├── Dockerfile
 ├── instalar_windows.bat
 ├── instalar_linux_mac.sh
@@ -111,7 +111,7 @@ Winiw-Tool/
 WINIW_ADMIN_USER=test WINIW_ADMIN_PASS=test python -m unittest test_scorecard_v39 -v
 ```
 
-159 tests — 0 fallos. 14 skipped requieren el PDF real de DMA3.
+175 tests — 0 fallos. 13 skipped requieren el PDF real de DMA3.
 
 ---
 
@@ -121,4 +121,4 @@ Ver [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
-© 2026 [@pablo25rf](https://github.com/pablo25rf) · Amazon DSP · Todos los derechos reservados.
+© 2026 [@pablo25rf](https://github.com/pablo25rf) · Todos los derechos reservados.

@@ -1,9 +1,9 @@
 #!/bin/bash
 # ============================================================================
-# WINIW QUALITY SCORECARD - INSTALACION RAPIDA (Linux/macOS)
+# QUALITY SCORECARD - INSTALACION RAPIDA (Linux/macOS)
 # ============================================================================
-# Version: 3.7
-# Fecha: Febrero 2026
+# Version: 3.9
+# Fecha: Marzo 2026
 # ============================================================================
 
 set -e  # Exit on error
@@ -39,7 +39,7 @@ print_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
 }
 
-print_header "WINIW QUALITY SCORECARD - INSTALACION Y ACTUALIZACION"
+print_header "QUALITY SCORECARD - INSTALACION Y ACTUALIZACION"
 
 # [1/6] Verificar Python
 echo "[1/6] Verificando Python..."
@@ -157,7 +157,7 @@ echo "  - README.md: Guía completa del sistema"
 echo "  - CAMBIOS_APLICADOS.md: Detalles de mejoras implementadas"
 echo ""
 echo "Logs del sistema:"
-echo "  - logs/winiw_scorecard.log (rotativo, max 10MB)"
+echo "  - logs/scorecard.log (rotativo, max 10MB)"
 echo ""
 
 # Preguntar si desea ejecutar la aplicación
@@ -165,7 +165,7 @@ read -p "¿Deseas ejecutar la aplicación ahora? (s/n): " EJECUTAR
 
 if [[ $EJECUTAR =~ ^[Ss]$ ]]; then
     echo ""
-    echo "Iniciando Winiw Quality Scorecard..."
+    echo "Iniciando Quality Scorecard..."
     echo "Presiona Ctrl+C para detener"
     echo ""
     streamlit run app.py
