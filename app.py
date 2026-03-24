@@ -30,6 +30,7 @@ import os
 import logging
 import html as _html
 import altair as alt
+import concurrent.futures
 from datetime import datetime, timedelta
 
 # Logger de auditoría de la app (separado del motor)
@@ -1707,13 +1708,28 @@ if tab_dsp:
             # ── PASO 1: Parsear todos los PDFs de una vez ─────────────────
             _pdf_key = f"_dsp_parsed_{','.join(f.name for f in uploaded_pdfs)}"
             if st.session_state.get('_dsp_pdf_key') != _pdf_key:
-                _all_parsed = []
                 _prog = st.progress(0, text="Procesando PDFs...")
-                for _i, _pdf_file in enumerate(uploaded_pdfs):
-                    _prog.progress((_i) / len(uploaded_pdfs), text=f"Leyendo {_pdf_file.name}...")
-                    _p = scorecard.parse_dsp_scorecard_pdf(_pdf_file.read())
-                    _p['_filename'] = _pdf_file.name
-                    _all_parsed.append(_p)
+                _pdf_bytes_list = [(f.name, f.read()) for f in uploaded_pdfs]
+                _total = len(_pdf_bytes_list)
+
+                def _parse_one(_item):
+                    _name, _data = _item
+                    _res = scorecard.parse_dsp_scorecard_pdf(_data)
+                    _res['_filename'] = _name
+                    return _name, _res
+
+                _results_map = {}
+                _workers = min(_total, 8)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=_workers) as _ex:
+                    _futs = {_ex.submit(_parse_one, item): item[0] for item in _pdf_bytes_list}
+                    _done = 0
+                    for _fut in concurrent.futures.as_completed(_futs):
+                        _fname, _parsed = _fut.result()
+                        _results_map[_fname] = _parsed
+                        _done += 1
+                        _prog.progress(_done / _total, text=f"Procesados {_done}/{_total}...")
+
+                _all_parsed = [_results_map[name] for name, _ in _pdf_bytes_list]
                 _prog.progress(1.0, text="✅ Procesados")
                 st.session_state['_dsp_pdf_key']    = _pdf_key
                 st.session_state['_dsp_all_parsed'] = _all_parsed

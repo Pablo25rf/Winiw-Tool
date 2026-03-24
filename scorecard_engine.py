@@ -2784,26 +2784,29 @@ def parse_dsp_scorecard_pdf(pdf_bytes: bytes) -> dict:
             else:
                 semana = None
 
-            # Año: Buscar en todo el PDF de forma agresiva
+            # Año: Buscar en página 1 primero (más rápido), luego en el resto
+            _year_pats = [
+                r'(?<!\d)(20[2-9]\d)(?!\d)',
+                r'\b(20[2-9]\d)[-/]\d{1,2}[-/]\d{1,2}\b',
+                r'\b\d{1,2}[-/]\d{1,2}[-/](20[2-9]\d)\b',
+            ]
             year = None
-            for p in pdf.pages:
-                txt = p.extract_text() or ""
-                # Buscar año explícito (20xx) con límites de palabra
-                m = re.search(r'(?<!\d)(20[2-9]\d)(?!\d)', txt)
-                if m:
-                    year = int(m.group(1))
+            for _pat in _year_pats:
+                _m = re.search(_pat, p1)
+                if _m:
+                    year = int(_m.group(1))
                     break
+            if not year:
+                for _p in pdf.pages[1:]:
+                    _txt = _p.extract_text() or ""
+                    for _pat in _year_pats:
+                        _m = re.search(_pat, _txt)
+                        if _m:
+                            year = int(_m.group(1))
+                            break
+                    if year:
+                        break
 
-                # Búsqueda alternativa: fechas completas (ej: 02/15/2026 o 2026-02-15)
-                m = re.search(r'\b(20[2-9]\d)[-/]\d{1,2}[-/]\d{1,2}\b', txt)
-                if m:
-                    year = int(m.group(1))
-                    break
-                m = re.search(r'\b\d{1,2}[-/]\d{1,2}[-/](20[2-9]\d)\b', txt)
-                if m:
-                    year = int(m.group(1))
-                    break
-            
             if not year:
                 year = datetime.now().year
             
@@ -2824,23 +2827,41 @@ def parse_dsp_scorecard_pdf(pdf_bytes: bytes) -> dict:
             else:
                 result['errors'].append("PDF sin página 2 (KPIs de estación)")
 
-            # ── PÁGINAS 3-4: Tabla de drivers (índices 2 y 3) ────────────────
-            # Página 3 (idx 2) tiene cabecera; página 4 (idx 3) solo datos
+            # ── PÁGINAS 3+: Tabla de drivers (empieza en índice 2) ──────────
+            # Detecta dinámicamente cuántas páginas ocupa la tabla de drivers
+            # (centros grandes pueden tener 3+ páginas de datos).
+            _DRIVER_ID_PAT = re.compile(r'^[A-Z0-9]{10,20}$')
+
+            def _page_has_driver_rows(tbl):
+                if not tbl:
+                    return False
+                for _row in tbl:
+                    if _row and _row[0] and _DRIVER_ID_PAT.match(str(_row[0]).strip()):
+                        return True
+                # Tabla con solo cabecera (centro sin datos esa semana)
+                if tbl[0] and str(tbl[0][0]).strip() == 'Transporter ID':
+                    return True
+                return False
+
             all_driver_rows = []
-            for page_idx in [2, 3]:
-                if page_idx < len(pdf.pages):
-                    tbl = pdf.pages[page_idx].extract_table()
-                    if tbl:
-                        all_driver_rows.extend(tbl)
+            _whc_page_idx = None
+            for page_idx in range(2, len(pdf.pages)):
+                tbl = pdf.pages[page_idx].extract_table()
+                if _page_has_driver_rows(tbl):
+                    all_driver_rows.extend(tbl)
+                else:
+                    # Primera página sin IDs de driver = página de WHC
+                    _whc_page_idx = page_idx
+                    break
 
             if all_driver_rows:
                 result['drivers'] = _build_drivers_df(all_driver_rows, result['errors'])
             else:
-                result['errors'].append("No se encontraron datos de drivers en páginas 3-4")
+                result['errors'].append("No se encontraron datos de drivers en el PDF")
 
-            # ── PÁGINA 5: Working Hours Exceptions (idx 4) ──────────────────
-            if len(pdf.pages) > 4:
-                tbl = pdf.pages[4].extract_table()
+            # ── Working Hours Exceptions: primera página tras los drivers ────
+            if _whc_page_idx is not None and _whc_page_idx < len(pdf.pages):
+                tbl = pdf.pages[_whc_page_idx].extract_table()
                 if tbl:
                     result['wh'] = _build_wh_df(tbl, result['errors'])
 
@@ -3148,12 +3169,12 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
                         ent_v, 0, 0, 0,                 # dnr, fs_count, dnr_risk_events = 0
                         dcr_v, pod_v, cc_v, 1.0, 0.0, 1.0,  # dcr, pod, cc, fdps, rts, cdf
                         detalles, 'PDF', ts_ins,
-                        # columnas _oficial
+                        # columnas _oficial (None → NULL en BD, no 0.0)
                         ent_v, dcr_v, pod_v, cc_v,
-                        float(row.get('dsc_dpmo') or 0.0),
-                        float(row.get('lor_dpmo') or 0.0),
-                        float(row.get('ce_dpmo')  or 0.0),
-                        float(row.get('cdf_dpmo_oficial') or 0.0),
+                        row.get('dsc_dpmo'),
+                        row.get('lor_dpmo'),
+                        row.get('ce_dpmo'),
+                        row.get('cdf_dpmo_oficial'),
                         1,  # pdf_loaded
                     ))
 
