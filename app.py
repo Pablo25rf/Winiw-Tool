@@ -33,6 +33,9 @@ import altair as alt
 import concurrent.futures
 from datetime import datetime, timedelta
 
+# Alias de escape HTML — usar en TODA inserción de datos de usuario en HTML
+_h = _html.escape
+
 # Logger de auditoría de la app (separado del motor)
 _log = logging.getLogger("scorecard_app")
 if not _log.handlers:
@@ -143,11 +146,11 @@ def get_active_weeks(_db_config_key: str, db_config: dict, limit: int = MAX_SEMA
     """
     try:
         with scorecard.db_connection(db_config) as conn:
+            _ph_aw = '%s' if db_config and db_config.get('type') == 'postgresql' else '?'
             df = pd.read_sql_query(
                 "SELECT semana, MAX(timestamp) as last_upload "
-                "FROM scorecards GROUP BY semana ORDER BY last_upload DESC"
-                f" LIMIT {limit}",
-                conn
+                f"FROM scorecards GROUP BY semana ORDER BY last_upload DESC LIMIT {_ph_aw}",
+                conn, params=(int(limit),)
             )
         return df['semana'].tolist()
     except Exception as _e:
@@ -476,8 +479,8 @@ def cached_trend_batch(_db_config_key: str, db_config: dict, centro: str,
         with scorecard.db_connection(db_config) as conn:
             df_semanas = pd.read_sql_query(
                 f"SELECT DISTINCT semana FROM scorecards WHERE centro = {p} "
-                f"ORDER BY semana DESC LIMIT {n_weeks}",
-                conn, params=(centro,)
+                f"ORDER BY semana DESC LIMIT {p}",
+                conn, params=(centro, int(n_weeks))
             )
             if df_semanas.empty:
                 return pd.DataFrame()
@@ -780,7 +783,7 @@ def badge(text: str, color: str, text_color: str = 'white', small: bool = True) 
     return (
         f'<span style="background:{color};color:{text_color};padding:2px 7px;'
         f'border-radius:12px;font-size:{size};font-weight:600;'
-        f'display:inline-block;margin:1px 2px;white-space:nowrap">{text}</span>'
+        f'display:inline-block;margin:1px 2px;white-space:nowrap">{_h(str(text))}</span>'
     )
 
 
@@ -1719,7 +1722,9 @@ if tab_dsp:
                     return _name, _res
 
                 _results_map = {}
-                _workers = min(_total, 8)
+                # Máx 6 workers: parseo de PDFs es CPU-bound por pdfplumber;
+                # dejar 4 conexiones libres del pool (maxconn=10) para otras queries.
+                _workers = min(_total, 6)
                 with concurrent.futures.ThreadPoolExecutor(max_workers=_workers) as _ex:
                     _futs = {_ex.submit(_parse_one, item): item[0] for item in _pdf_bytes_list}
                     _done = 0
@@ -1746,19 +1751,20 @@ if tab_dsp:
             def _amz_badge(tier: str) -> str:
                 c = _TIER_COLORS.get(tier, '#6c757d')
                 return (f'<span style="background:{c};color:#fff;padding:2px 8px;'
-                        f'border-radius:3px;font-size:.78em;font-weight:600">{tier or "—"}</span>')
+                        f'border-radius:3px;font-size:.78em;font-weight:600">'
+                        f'{_h(tier) if tier else "—"}</span>')
 
             def _block_hdr(icon: str, title: str, tier: str | None = None) -> str:
                 c = _TIER_COLORS.get(tier, '#495057')
-                badge = f' {_amz_badge(tier)}' if tier else ''
+                _badge = f' {_amz_badge(tier)}' if tier else ''
                 return (f'<div style="background:#f0f2f6;border-left:4px solid {c};'
                         f'padding:6px 12px;border-radius:4px;margin:12px 0 4px 0;font-weight:600">'
-                        f'{icon} {title}{badge}</div>')
+                        f'{_h(icon)} {_h(title)}{_badge}</div>')
 
             def _sub_hdr(title: str) -> str:
                 return (f'<div style="color:#6c757d;font-size:.8em;font-weight:700;'
                         f'margin:8px 0 2px 0;text-transform:uppercase;letter-spacing:.5px">'
-                        f'{title}</div>')
+                        f'{_h(title)}</div>')
 
             _ok_parsed  = [p for p in _all_parsed if p['ok']]
             _err_parsed = [p for p in _all_parsed if not p['ok']]
@@ -1899,7 +1905,7 @@ if tab_dsp:
                             _co2.markdown(
                                 f"<p style='font-size:.85em;margin:0;color:#6c757d'>BOC</p>"
                                 f"<span style='background:{_boc_color};color:#fff;padding:3px 10px;"
-                                f"border-radius:3px;font-size:.9em;font-weight:600'>{_boc_val}</span>",
+                                f"border-radius:3px;font-size:.9em;font-weight:600'>{_h(_boc_val)}</span>",
                                 unsafe_allow_html=True
                             )
                             _whc = _s.get('whc_pct')
@@ -1912,7 +1918,7 @@ if tab_dsp:
                             _co4.markdown(
                                 f"<p style='font-size:.85em;margin:0;color:#6c757d'>CAS</p>"
                                 f"<span style='background:{_cas_color};color:#fff;padding:3px 10px;"
-                                f"border-radius:3px;font-size:.9em;font-weight:600'>{_cas_val}</span>",
+                                f"border-radius:3px;font-size:.9em;font-weight:600'>{_h(_cas_val)}</span>",
                                 unsafe_allow_html=True
                             )
 
@@ -1972,7 +1978,7 @@ if tab_dsp:
                                 f"<div style='background:#fff3cd;border-left:4px solid #FF9900;"
                                 f"padding:8px 12px;border-radius:4px;margin:12px 0 6px 0'>"
                                 f"🎯 <b>Focus Areas:</b>&nbsp; "
-                                f"1. {_fa1} &nbsp;·&nbsp; 2. {_fa2} &nbsp;·&nbsp; 3. {_fa3}</div>",
+                                f"1. {_h(_fa1)} &nbsp;·&nbsp; 2. {_h(_fa2)} &nbsp;·&nbsp; 3. {_h(_fa3)}</div>",
                                 unsafe_allow_html=True
                             )
 
@@ -3052,15 +3058,17 @@ with tab_hist:
                 page = min(page, total_pages - 1)
 
                 offset = page * PAGE_SIZE
+                _ph = '%s' if db_config and db_config.get('type') == 'postgresql' else '?'
                 q = f"""
                     SELECT semana, centro, driver_name AS conductor, driver_id AS id,
                            calificacion, score, dnr, dcr, pod, cc, detalles
                     FROM scorecards {where_sql}
                     ORDER BY fecha_semana DESC, semana DESC, score DESC
-                    LIMIT {PAGE_SIZE} OFFSET {offset}
+                    LIMIT {_ph} OFFSET {_ph}
                 """
+                _q_params = list(params or []) + [int(PAGE_SIZE), int(offset)]
                 with scorecard.db_connection(db_config) as conn2:
-                    df_filtered = pd.read_sql_query(q, conn2, params=params if params else None)
+                    df_filtered = pd.read_sql_query(q, conn2, params=_q_params)
                 for _c, _p in [('dcr','dcr_pct'),('pod','pod_pct'),('cc','cc_pct')]:
                     if _c in df_filtered.columns:
                         df_filtered[_p] = (df_filtered[_c] * 100).round(2)
@@ -3161,18 +3169,17 @@ with tab_hist:
 
                 _where_sql_cached = st.session_state.get('_hist_where_sql', '')
                 _params_cached    = st.session_state.get('_hist_params', [])
+                _ph2 = '%s' if db_config and db_config.get('type') == 'postgresql' else '?'
                 _q_page = f"""
                     SELECT semana, centro, driver_name AS conductor, driver_id AS id,
                            calificacion, score, dnr, dcr, pod, cc, detalles
                     FROM scorecards {_where_sql_cached}
                     ORDER BY fecha_semana DESC, semana DESC, score DESC
-                    LIMIT {PAGE_SIZE} OFFSET {offset}
+                    LIMIT {_ph2} OFFSET {_ph2}
                 """
+                _p_page = list(_params_cached or []) + [int(PAGE_SIZE), int(offset)]
                 with scorecard.db_connection(db_config) as _conn_p:
-                    df_page_hist = pd.read_sql_query(
-                        _q_page, _conn_p,
-                        params=_params_cached if _params_cached else None
-                    )
+                    df_page_hist = pd.read_sql_query(_q_page, _conn_p, params=_p_page)
                 for _c, _p in [('dcr','dcr_pct'),('pod','pod_pct'),('cc','cc_pct')]:
                     if _c in df_page_hist.columns:
                         df_page_hist[_p] = (df_page_hist[_c] * 100).round(2)
@@ -3733,7 +3740,8 @@ if tab_admin:
                         cursor.execute("SELECT COUNT(*) FROM scorecards")
                         stats['records'] = cursor.fetchone()[0]
                         cursor.execute(
-                            f"SELECT semana, MAX(timestamp) t FROM scorecards GROUP BY semana ORDER BY t DESC LIMIT {SEMANAS_RECIENTES}"
+                            f"SELECT semana, MAX(timestamp) t FROM scorecards GROUP BY semana ORDER BY t DESC LIMIT {p}",
+                            (int(SEMANAS_RECIENTES),)
                         )
                         recent_weeks = cursor.fetchall()
 

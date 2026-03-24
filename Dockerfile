@@ -30,8 +30,13 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY app.py .
 COPY scorecard_engine.py .
 
-# Crear directorio de logs
-RUN mkdir -p logs
+# Crear directorio de logs y usuario no-root (buena práctica de seguridad)
+RUN mkdir -p logs && \
+    addgroup --system appgroup && \
+    adduser --system --ingroup appgroup --no-create-home appuser && \
+    chown -R appuser:appgroup /app
+
+USER appuser
 
 # Puerto Streamlit
 EXPOSE 8501

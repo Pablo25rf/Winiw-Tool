@@ -45,14 +45,15 @@ _PG_POOL_LOCK = _threading.Lock()
 def _get_pg_pool(db_config: dict):
     """
     Devuelve (o crea) un ThreadedConnectionPool para Supabase.
-    minconn=1, maxconn=5 — apropiado para 10-30 usuarios con Streamlit Cloud.
+    minconn=2, maxconn=10 — soporta hasta ~10 usuarios simultáneos en Streamlit Cloud
+    con margen para el procesamiento paralelo de PDFs (ThreadPoolExecutor max_workers=8).
     Lock para evitar race condition si dos threads llegan simultáneamente.
     """
     global _PG_POOL
     with _PG_POOL_LOCK:
         if _PG_POOL is None or _PG_POOL.closed:
             _PG_POOL = pg_pool.ThreadedConnectionPool(
-                minconn=1, maxconn=5,
+                minconn=2, maxconn=10,
                 host=db_config.get('host', 'localhost'),
                 database=db_config.get('database', 'postgres'),
                 user=db_config.get('user', 'postgres'),
@@ -1473,59 +1474,58 @@ def db_connection(db_config: Optional[Dict] = None):
 
 def hash_password(password: str) -> str:
     """
-    Encripta la contraseña usando bcrypt (preferido) o SHA-256 (fallback).
-    
-    Args:
-        password: Contraseña en texto plano
-        
+    Encripta la contraseña usando bcrypt (preferido) o PBKDF2-HMAC-SHA256
+    con salt aleatorio de 32 bytes como fallback seguro.
+
     Returns:
-        Hash de la contraseña
-        
-    Notes:
-        - bcrypt es más seguro (salt automático, resistente a rainbow tables)
-        - SHA-256 se usa como fallback si bcrypt no está instalado
+        Hash prefijado: 'bcrypt:<hash>' o 'pbkdf2:<salt_hex>:<hash_hex>'
     """
     if HAS_BCRYPT:
-        # Usar bcrypt con salt automático (más seguro)
         salt = bcrypt.gensalt()
         hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
-        # Agregar prefijo para identificar que es bcrypt
         return 'bcrypt:' + hashed.decode('utf-8')
     else:
-        # Fallback a SHA-256 (menos seguro pero funcional)
-        logger.warning("Usando SHA-256 para hash de contraseña. Considera instalar bcrypt para mejor seguridad.")
-        return 'sha256:' + hashlib.sha256(password.encode()).hexdigest()
+        # PBKDF2-HMAC-SHA256 con salt aleatorio — seguro sin bcrypt
+        # 310.000 iteraciones (recomendación NIST 2024)
+        salt = os.urandom(32)
+        dk = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, 310_000)
+        return 'pbkdf2:' + salt.hex() + ':' + dk.hex()
 
 def verify_password(password: str, hashed: str) -> bool:
     """
     Verifica una contraseña contra su hash.
-    
-    Args:
-        password: Contraseña en texto plano
-        hashed: Hash almacenado en base de datos
-        
-    Returns:
-        True si la contraseña coincide, False en caso contrario
-        
-    Notes:
-        - Detecta automáticamente el método de hash usado (bcrypt o SHA-256)
-        - Compatible con hashes antiguos (SHA-256) y nuevos (bcrypt)
+    Soporta bcrypt, pbkdf2 y sha256 legacy (solo lectura, nunca genera nuevos sha256).
+    Usa compare_digest para evitar timing attacks.
     """
     try:
         if hashed.startswith('bcrypt:'):
             if HAS_BCRYPT:
                 return bcrypt.checkpw(
                     password.encode('utf-8'),
-                    hashed.removeprefix('bcrypt:').encode('utf-8')
+                    hashed[len('bcrypt:'):].encode('utf-8')
                 )
             logger.error("Hash es bcrypt pero biblioteca no está instalada")
             return False
+        elif hashed.startswith('pbkdf2:'):
+            parts = hashed[len('pbkdf2:'):].split(':')
+            if len(parts) != 2:
+                return False
+            salt = bytes.fromhex(parts[0])
+            expected = bytes.fromhex(parts[1])
+            dk = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, 310_000)
+            return hashlib.compare_digest(dk, expected)
         elif hashed.startswith('sha256:'):
-            return hashlib.sha256(password.encode()).hexdigest() == hashed.removeprefix('sha256:')
+            # Legacy — solo para verificar hashes antiguos en BD (no genera nuevos)
+            stored = bytes.fromhex(hashed[len('sha256:'):])
+            candidate = bytes.fromhex(hashlib.sha256(password.encode()).hexdigest())
+            return hashlib.compare_digest(stored, candidate)
         else:
-            # Compatibilidad con hashes antiguos sin prefijo (asumimos SHA-256)
-            test_hash = hashlib.sha256(password.encode()).hexdigest()
-            return test_hash == hashed
+            # Hashes muy antiguos sin prefijo
+            if len(hashed) != 64:
+                return False
+            stored = bytes.fromhex(hashed)
+            candidate = bytes.fromhex(hashlib.sha256(password.encode()).hexdigest())
+            return hashlib.compare_digest(stored, candidate)
     except Exception as e:
         logger.error(f"Error verificando contraseña: {e}")
         return False
@@ -1692,24 +1692,34 @@ def init_database(db_config: Optional[Dict] = None):
         ''')
 
         # Auto-Migración: Añadir columnas si no existen (Para bases de datos ya creadas)
+        # ── Cache de PRAGMA table_info para SQLite: evitar consultas redundantes ──
+        # En PostgreSQL usamos ADD COLUMN IF NOT EXISTS (no necesita cache).
+        _sqlite_cols: dict = {}  # tabla → set de columnas ya existentes
+
+        def _sqlite_has_col(tbl: str, col: str) -> bool:
+            if tbl not in _sqlite_cols:
+                cursor.execute(f"PRAGMA table_info({tbl})")
+                _sqlite_cols[tbl] = {c[1] for c in cursor.fetchall()}
+            return col in _sqlite_cols[tbl]
+
+        def _sqlite_add_col(tbl: str, col: str, col_type: str):
+            if not _sqlite_has_col(tbl, col):
+                cursor.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {col_type}")
+                _sqlite_cols[tbl].add(col)  # actualizar cache
+
         cols_to_add = [
-            ("fecha_semana", "DATE" if is_postgres else "DATE"),
-            ("uploaded_by", "VARCHAR(100)" if is_postgres else "TEXT")
+            ("fecha_semana", "DATE"),
+            ("uploaded_by", "VARCHAR(100)" if is_postgres else "TEXT"),
         ]
-        
         for col_name, col_type in cols_to_add:
             try:
                 if is_postgres:
                     cursor.execute(f"ALTER TABLE scorecards ADD COLUMN IF NOT EXISTS {col_name} {col_type}")
                 else:
-                    # SQLite no soporta ADD COLUMN IF NOT EXISTS de forma directa
-                    cursor.execute(f"PRAGMA table_info(scorecards)")
-                    existing_cols = [c[1] for c in cursor.fetchall()]
-                    if col_name not in existing_cols:
-                        cursor.execute(f"ALTER TABLE scorecards ADD COLUMN {col_name} {col_type}")
+                    _sqlite_add_col("scorecards", col_name, col_type)
             except Exception as e:
                 logger.warning(f"Aviso migración columna {col_name}: {e}")
-        
+
         # Auto-Migración tabla users: Añadir columnas nuevas si no existen
         user_cols_to_add = [
             ("must_change_password", "INTEGER DEFAULT 0"),
@@ -1720,10 +1730,7 @@ def init_database(db_config: Optional[Dict] = None):
                 if is_postgres:
                     cursor.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {_ucol} {_utype}")
                 else:
-                    cursor.execute("PRAGMA table_info(users)")
-                    existing_user_cols = [c[1] for c in cursor.fetchall()]
-                    if _ucol not in existing_user_cols:
-                        cursor.execute(f"ALTER TABLE users ADD COLUMN {_ucol} {_utype}")
+                    _sqlite_add_col("users", _ucol, _utype)
             except Exception as _ue:
                 logger.warning(f"Migración users col {_ucol}: {_ue}")
 
@@ -1835,10 +1842,7 @@ def init_database(db_config: Optional[Dict] = None):
                 if is_postgres:
                     cursor.execute(f"ALTER TABLE scorecards ADD COLUMN IF NOT EXISTS {col_name} {col_type}")
                 else:
-                    cursor.execute("PRAGMA table_info(scorecards)")
-                    existing = [c[1] for c in cursor.fetchall()]
-                    if col_name not in existing:
-                        cursor.execute(f"ALTER TABLE scorecards ADD COLUMN {col_name} {col_type}")
+                    _sqlite_add_col("scorecards", col_name, col_type)
             except Exception as e:
                 logger.warning(f"Migración v3.2 col {col_name}: {e}")
 
@@ -1851,10 +1855,7 @@ def init_database(db_config: Optional[Dict] = None):
                 if is_postgres:
                     cursor.execute(f"ALTER TABLE wh_exceptions ADD COLUMN IF NOT EXISTS {col_name} {col_type}")
                 else:
-                    cursor.execute("PRAGMA table_info(wh_exceptions)")
-                    existing = [c[1] for c in cursor.fetchall()]
-                    if col_name not in existing:
-                        cursor.execute(f"ALTER TABLE wh_exceptions ADD COLUMN {col_name} {col_type}")
+                    _sqlite_add_col("wh_exceptions", col_name, col_type)
             except Exception as e:
                 logger.warning(f"Migración v3.9 wh_exceptions col {col_name}: {e}")
 
@@ -1866,9 +1867,7 @@ def init_database(db_config: Optional[Dict] = None):
                 if is_postgres:
                     cursor.execute(f"ALTER TABLE {_tbl} ADD COLUMN IF NOT EXISTS anio INTEGER")
                 else:
-                    cursor.execute(f"PRAGMA table_info({_tbl})")
-                    if 'anio' not in [c[1] for c in cursor.fetchall()]:
-                        cursor.execute(f"ALTER TABLE {_tbl} ADD COLUMN anio INTEGER")
+                    _sqlite_add_col(_tbl, "anio", "INTEGER")
             except Exception as _e:
                 logger.warning(f"Migración v3.9b anio en {_tbl}: {_e}")
 
@@ -1912,9 +1911,7 @@ def init_database(db_config: Optional[Dict] = None):
                     END $$;
                 """)
             else:
-                cursor.execute("PRAGMA table_info(station_scorecards)")
-                if 'anio' not in [c[1] for c in cursor.fetchall()]:
-                    cursor.execute("ALTER TABLE station_scorecards ADD COLUMN anio INTEGER")
+                _sqlite_add_col("station_scorecards", "anio", "INTEGER")
         except Exception as _e:
             logger.warning(f"Migración v3.9b station_scorecards anio+constraint: {_e}")
 
@@ -2131,8 +2128,11 @@ def week_to_date(week_str: str, year: int = None) -> str:
             return _fallback
 
         if year is None:
-            year = datetime.now().year
-            if week_num > 45:
+            now = datetime.now()
+            year = now.year
+            # Si estamos en enero (mes 1 o 2) y la semana es alta, pertenece al año anterior.
+            # Umbral: semana > 45 Y estamos en enero-febrero del año nuevo.
+            if week_num > 45 and now.month <= 2:
                 year -= 1
         # Cálculo ISO: 4 de enero es siempre semana 1
         d = datetime(year, 1, 4)
@@ -3490,10 +3490,10 @@ def check_and_send_alerts(week: str, center: str,
         body = f"""
         <div style='font-family:Arial,sans-serif;max-width:700px;margin:0 auto'>
             <div style='background:#232f3e;color:white;padding:20px;border-radius:8px 8px 0 0'>
-                <h2 style='margin:0'>🚨 Alerta de Calidad — {center} {week}</h2>
+                <h2 style='margin:0'>🚨 Alerta de Calidad — {_html_escape.escape(str(center))} {_html_escape.escape(str(week))}</h2>
                 <p style='margin:5px 0 0;opacity:.8'>
                     {len(repeated_poor)} conductor(es) en POOR durante 2 semanas consecutivas
-                    ({prev_week} y {week})
+                    ({_html_escape.escape(str(prev_week))} y {_html_escape.escape(str(week))})
                 </p>
             </div>
             <div style='padding:20px;border:1px solid #dee2e6;border-top:none;border-radius:0 0 8px 8px'>
