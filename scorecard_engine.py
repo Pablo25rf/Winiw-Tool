@@ -3078,7 +3078,10 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
         return 0, 0
 
     try:
+        _t_fn_start = _time.perf_counter()
         with db_connection(db_config) as conn:
+            _t_conn_ok = _time.perf_counter()
+            logger.info(f"[timing] db_connection acquired: {_t_conn_ok - _t_fn_start:.2f}s")
             cursor  = conn.cursor()
             is_pg   = db_config and db_config.get('type') == 'postgresql'
             ph      = '%s' if is_pg else '?'
@@ -3259,7 +3262,8 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
         if not_found:
             logger.warning(f"Drivers del PDF sin match en scorecards ({len(not_found)}): "
                            f"{not_found[:5]}{'...' if len(not_found) > 5 else ''} — filas insertadas desde PDF")
-        logger.info(f"✓ update_drivers_from_pdf: {updated} actualizados, {len(not_found)} sin match")
+        logger.info(f"✓ update_drivers_from_pdf: {updated} actualizados, {len(not_found)} sin match"
+                    f" | total {_time.perf_counter()-_t_fn_start:.2f}s")
         return updated, len(not_found)
 
     except Exception as e:
