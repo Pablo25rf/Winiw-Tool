@@ -3052,9 +3052,7 @@ def _recalculate_scores_for_ids(cursor, ph: str, week: str, center: str,
                 WHERE s.semana = '{_w}' AND s.centro = '{_c}' AND s.anio = {_y}
                   AND s.driver_id = d.driver_id
             """
-            _t_sc = _time.perf_counter()
             pg_extras.execute_values(cursor, _q_score, su_pg)
-            logger.info(f"[timing] execute_values UPDATE scores: {_time.perf_counter()-_t_sc:.2f}s ({len(su_pg)} rows)")
         else:
             _q_score = ("UPDATE scorecards SET calificacion=?, score=?, detalles=? "
                         "WHERE semana=? AND centro=? AND anio=? AND driver_id=?")
@@ -3080,8 +3078,6 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
     try:
         _t_fn_start = _time.perf_counter()
         with db_connection(db_config) as conn:
-            _t_conn_ok = _time.perf_counter()
-            logger.info(f"[timing] db_connection acquired: {_t_conn_ok - _t_fn_start:.2f}s")
             cursor  = conn.cursor()
             is_pg   = db_config and db_config.get('type') == 'postgresql'
             ph      = '%s' if is_pg else '?'
@@ -3096,14 +3092,12 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
                 return 0, 0
 
             phs = ", ".join([ph] * len(all_ids))
-            _t_sel = _time.perf_counter()
             cursor.execute(
                 f"SELECT driver_id FROM scorecards "
                 f"WHERE semana={ph} AND centro={ph} AND anio={ph} AND driver_id IN ({phs})",
                 [week, center, year] + all_ids
             )
             existing_ids = {row[0] for row in cursor.fetchall()}
-            logger.info(f"[timing] SELECT existing_ids: {_time.perf_counter()-_t_sel:.2f}s")
 
             not_found = [did for did in all_ids if did not in existing_ids]
 
@@ -3134,7 +3128,6 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
                     # indices:            0    1    2    3    4    5    6    7    8    9   10   11   12   13    14     15    16
                     # uv_pg: (ent, dcr, pod, cc, dsc, lor, ce, cdf, driver_id) — 9 values only
                     uv_pg = [(t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[16]) for t in update_vals]
-                    _t0 = _time.perf_counter()
                     q_uv = f"""
                         UPDATE scorecards AS s SET
                             entregados_oficial = d.entregados_oficial::double precision,
@@ -3158,7 +3151,6 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
                           AND s.driver_id = d.driver_id
                     """
                     pg_extras.execute_values(cursor, q_uv, uv_pg)
-                    logger.info(f"[timing] execute_values UPDATE drivers: {_time.perf_counter()-_t0:.2f}s ({len(uv_pg)} rows)")
                 else:
                     q_update = """
                         UPDATE scorecards SET
@@ -3255,15 +3247,12 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
                         cursor.executemany(q_ins, insert_vals)
                     logger.info(f"✓ update_drivers_from_pdf: {len(insert_vals)} nuevas filas insertadas desde PDF")
 
-            _t_commit = _time.perf_counter()
             conn.commit()
-            logger.info(f"[timing] commit: {_time.perf_counter()-_t_commit:.2f}s")
 
         if not_found:
             logger.warning(f"Drivers del PDF sin match en scorecards ({len(not_found)}): "
                            f"{not_found[:5]}{'...' if len(not_found) > 5 else ''} — filas insertadas desde PDF")
-        logger.info(f"✓ update_drivers_from_pdf: {updated} actualizados, {len(not_found)} sin match"
-                    f" | total {_time.perf_counter()-_t_fn_start:.2f}s")
+        logger.info(f"✓ update_drivers_from_pdf: {updated} actualizados, {len(not_found)} sin match")
         return updated, len(not_found)
 
     except Exception as e:
