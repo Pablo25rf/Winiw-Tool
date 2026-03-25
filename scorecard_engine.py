@@ -43,6 +43,9 @@ except ImportError:
 import threading as _threading
 _PG_POOL: "pg_pool.ThreadedConnectionPool | None" = None
 _PG_POOL_LOCK = _threading.Lock()
+# Caché del check de columna 'anio' en station_scorecards — nunca cambia en runtime.
+# Evita 1 query a information_schema por PDF (162 PDFs = 162 queries eliminadas).
+_SS_ANIO_EXISTS: "dict[str, bool]" = {}
 
 def _get_pg_pool(db_config: dict):
     """
@@ -2941,17 +2944,19 @@ def save_station_scorecard(station_data: dict, week: str, center: str,
             cursor = conn.cursor()
 
             if is_pg:
-                # Asegurar que la columna anio existe (puede faltar en BDs antiguas
-                # si el usuario de la app no tiene permisos DDL — en ese caso hay
-                # que ejecutar el ALTER TABLE manualmente en Supabase SQL Editor)
-                try:
-                    cursor.execute(
-                        "SELECT 1 FROM information_schema.columns "
-                        "WHERE table_name='station_scorecards' AND column_name='anio'"
-                    )
-                    anio_exists = cursor.fetchone() is not None
-                except Exception:
-                    anio_exists = False
+                # Caché: evita 1 query a information_schema por PDF.
+                # La columna nunca desaparece en runtime, es seguro cachear para siempre.
+                _cache_key = db_config.get('host', '') + '/' + db_config.get('database', '')
+                if _cache_key not in _SS_ANIO_EXISTS:
+                    try:
+                        cursor.execute(
+                            "SELECT 1 FROM information_schema.columns "
+                            "WHERE table_name='station_scorecards' AND column_name='anio'"
+                        )
+                        _SS_ANIO_EXISTS[_cache_key] = cursor.fetchone() is not None
+                    except Exception:
+                        _SS_ANIO_EXISTS[_cache_key] = False
+                anio_exists = _SS_ANIO_EXISTS[_cache_key]
 
                 if anio_exists:
                     update_set = ', '.join(
@@ -3261,15 +3266,17 @@ def save_wh_exceptions(wh_df: pd.DataFrame, week: str, center: str,
                 )
                 for _, row in wh_df.iterrows()
             ]
-            cursor.executemany(
-                f"""INSERT INTO wh_exceptions
-                    (semana, fecha_semana, anio, centro, driver_id, driver_name,
-                     daily_limit_exceeded, weekly_limit_exceeded,
-                     under_offwork_limit, workday_limit_exceeded, uploaded_by)
-                    VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})
-                """,
-                wh_vals
+            _q_wh = (
+                f"INSERT INTO wh_exceptions"
+                f" (semana, fecha_semana, anio, centro, driver_id, driver_name,"
+                f" daily_limit_exceeded, weekly_limit_exceeded,"
+                f" under_offwork_limit, workday_limit_exceeded, uploaded_by)"
+                f" VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})"
             )
+            if is_pg:
+                pg_extras.execute_batch(cursor, _q_wh, wh_vals, page_size=200)
+            else:
+                cursor.executemany(_q_wh, wh_vals)
             conn.commit()
         n_named = sum(1 for r in wh_df['driver_id'] if str(r) in name_map)
         logger.info(f"✓ WHC exceptions guardadas: {len(wh_df)} para {center} {week} "
