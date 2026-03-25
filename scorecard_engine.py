@@ -3034,11 +3034,22 @@ def _recalculate_scores_for_ids(cursor, ph: str, week: str, center: str,
         score_updates.append((calificacion, float(score_val), detalles,
                                week, center, year, did))
     if score_updates:
-        _q_score = (f"UPDATE scorecards SET calificacion={ph}, score={ph}, detalles={ph} "
-                    f"WHERE semana={ph} AND centro={ph} AND anio={ph} AND driver_id={ph}")
         if ph == '%s':
-            pg_extras.execute_batch(cursor, _q_score, score_updates, page_size=200)
+            # Single SQL statement — one round trip for all N score updates
+            su_pg = [(t[3], t[4], t[5], t[0], t[1], t[2], t[6]) for t in score_updates]
+            _q_score = """
+                UPDATE scorecards AS s SET
+                    calificacion = d.calificacion,
+                    score        = d.score::double precision,
+                    detalles     = d.detalles
+                FROM (VALUES %s) AS d(semana, centro, anio, calificacion, score, detalles, driver_id)
+                WHERE s.semana = d.semana AND s.centro = d.centro AND s.anio = d.anio::integer
+                  AND s.driver_id = d.driver_id
+            """
+            pg_extras.execute_values(cursor, _q_score, su_pg)
         else:
+            _q_score = ("UPDATE scorecards SET calificacion=?, score=?, detalles=? "
+                        "WHERE semana=? AND centro=? AND anio=? AND driver_id=?")
             cursor.executemany(_q_score, score_updates)
     return len(score_updates)
 
@@ -3100,26 +3111,54 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
             ]
 
             if update_vals:
-                q_update = f"""
-                    UPDATE scorecards SET
-                        entregados_oficial = {ph},
-                        dcr_oficial        = {ph},
-                        pod_oficial        = {ph},
-                        cc_oficial         = {ph},
-                        dsc_dpmo           = {ph},
-                        lor_dpmo           = {ph},
-                        ce_dpmo            = {ph},
-                        cdf_dpmo_oficial   = {ph},
-                        dcr                = {ph},
-                        pod                = {ph},
-                        cc                 = {ph},
-                        entregados         = CASE WHEN {ph} > 0 THEN {ph} ELSE entregados END,
-                        pdf_loaded         = 1
-                    WHERE semana={ph} AND centro={ph} AND anio={ph} AND driver_id={ph}
-                """
                 if is_pg:
-                    pg_extras.execute_batch(cursor, q_update, update_vals, page_size=200)
+                    # Single SQL statement — one round trip for all N drivers
+                    # update_vals tuple: (ent, dcr, pod, cc, dsc, lor, ce, cdf, dcr, pod, cc, ent, ent, week, center, year, did)
+                    # indices:            0    1    2    3    4    5    6    7    8    9   10   11   12   13    14     15    16
+                    uv_pg = [(t[13], t[14], t[15], t[0], t[1], t[2], t[3],
+                              t[4], t[5], t[6], t[7], t[16]) for t in update_vals]
+                    q_uv = """
+                        UPDATE scorecards AS s SET
+                            entregados_oficial = d.entregados_oficial::double precision,
+                            dcr_oficial        = d.dcr_oficial::double precision,
+                            pod_oficial        = d.pod_oficial::double precision,
+                            cc_oficial         = d.cc_oficial::double precision,
+                            dsc_dpmo           = d.dsc_dpmo::double precision,
+                            lor_dpmo           = d.lor_dpmo::double precision,
+                            ce_dpmo            = d.ce_dpmo::double precision,
+                            cdf_dpmo_oficial   = d.cdf_dpmo_oficial::double precision,
+                            dcr                = d.dcr_oficial::double precision,
+                            pod                = d.pod_oficial::double precision,
+                            cc                 = d.cc_oficial::double precision,
+                            entregados         = CASE WHEN d.entregados_oficial::double precision > 0
+                                                     THEN d.entregados_oficial::double precision
+                                                     ELSE s.entregados END,
+                            pdf_loaded         = 1
+                        FROM (VALUES %s) AS d(semana, centro, anio,
+                                              entregados_oficial, dcr_oficial, pod_oficial, cc_oficial,
+                                              dsc_dpmo, lor_dpmo, ce_dpmo, cdf_dpmo_oficial, driver_id)
+                        WHERE s.semana = d.semana AND s.centro = d.centro AND s.anio = d.anio::integer
+                          AND s.driver_id = d.driver_id
+                    """
+                    pg_extras.execute_values(cursor, q_uv, uv_pg)
                 else:
+                    q_update = """
+                        UPDATE scorecards SET
+                            entregados_oficial = ?,
+                            dcr_oficial        = ?,
+                            pod_oficial        = ?,
+                            cc_oficial         = ?,
+                            dsc_dpmo           = ?,
+                            lor_dpmo           = ?,
+                            ce_dpmo            = ?,
+                            cdf_dpmo_oficial   = ?,
+                            dcr                = ?,
+                            pod                = ?,
+                            cc                 = ?,
+                            entregados         = CASE WHEN ? > 0 THEN ? ELSE entregados END,
+                            pdf_loaded         = 1
+                        WHERE semana=? AND centro=? AND anio=? AND driver_id=?
+                    """
                     cursor.executemany(q_update, update_vals)
                 updated = len(update_vals)
                 # Recalcular score: ahora dcr/pod/cc son reales (PDF) y dnr/rts son reales (CSV)
@@ -3191,15 +3230,10 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
 
                 if insert_vals:
                     if is_pg:
-                        q_ins = f"""
-                            INSERT INTO scorecards ({col_ins}) VALUES ({phs_ins})
-                            ON CONFLICT (semana, centro, anio, driver_id) DO NOTHING
-                        """
+                        q_ins = f"INSERT INTO scorecards ({col_ins}) VALUES %s ON CONFLICT (semana, centro, anio, driver_id) DO NOTHING"
+                        pg_extras.execute_values(cursor, q_ins, insert_vals)
                     else:
                         q_ins = f"INSERT OR IGNORE INTO scorecards ({col_ins}) VALUES ({phs_ins})"
-                    if is_pg:
-                        pg_extras.execute_batch(cursor, q_ins, insert_vals, page_size=200)
-                    else:
                         cursor.executemany(q_ins, insert_vals)
                     logger.info(f"✓ update_drivers_from_pdf: {len(insert_vals)} nuevas filas insertadas desde PDF")
 
