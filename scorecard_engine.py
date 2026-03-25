@@ -28,6 +28,7 @@ import sqlite3
 import html as _html_escape
 import io
 import hashlib
+import hmac as _hmac
 HAS_POSTGRES = False
 try:
     import psycopg2
@@ -1513,19 +1514,19 @@ def verify_password(password: str, hashed: str) -> bool:
             salt = bytes.fromhex(parts[0])
             expected = bytes.fromhex(parts[1])
             dk = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, 310_000)
-            return hashlib.compare_digest(dk, expected)
+            return _hmac.compare_digest(dk, expected)
         elif hashed.startswith('sha256:'):
             # Legacy — solo para verificar hashes antiguos en BD (no genera nuevos)
             stored = bytes.fromhex(hashed[len('sha256:'):])
             candidate = bytes.fromhex(hashlib.sha256(password.encode()).hexdigest())
-            return hashlib.compare_digest(stored, candidate)
+            return _hmac.compare_digest(stored, candidate)
         else:
             # Hashes muy antiguos sin prefijo
             if len(hashed) != 64:
                 return False
             stored = bytes.fromhex(hashed)
             candidate = bytes.fromhex(hashlib.sha256(password.encode()).hexdigest())
-            return hashlib.compare_digest(stored, candidate)
+            return _hmac.compare_digest(stored, candidate)
     except Exception as e:
         logger.error(f"Error verificando contraseña: {e}")
         return False
