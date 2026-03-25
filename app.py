@@ -1812,8 +1812,12 @@ if tab_dsp:
                 if st.button(_btn_label, type="primary", use_container_width=True,
                              key="save_all_pdfs"):
                     _save_prog = st.progress(0, text="Guardando...")
-                    _save_results = []
-                    for _i, _p in enumerate(_ok_parsed):
+                    _save_results = [None] * len(_ok_parsed)
+                    _n_total     = len(_ok_parsed)
+                    _saved_user  = user_data_session['name']
+
+                    def _save_one_pdf(_args):
+                        _i, _p = _args
                         _m = _p['meta']
                         _s = _p['station']
                         _c, _w, _yr = _m['centro'], _m['semana'], _m.get('year')
@@ -1821,26 +1825,32 @@ if tab_dsp:
                             _yr = datetime.now().year
                         try:
                             _ok_st, _err_st = scorecard.save_station_scorecard(
-                                _s, _w, _c, db_config, user_data_session['name'],
-                                year=_yr)
-                            _n_upd, _n_miss = scorecard.update_drivers_from_pdf(
+                                _s, _w, _c, db_config, _saved_user, year=_yr)
+                            _n_upd, _ = scorecard.update_drivers_from_pdf(
                                 _p['drivers'], _w, _c, db_config, year=_yr)
                             _ok_wh = scorecard.save_wh_exceptions(
-                                _p['wh'], _w, _c, db_config, user_data_session['name'],
-                                year=_yr)
+                                _p['wh'], _w, _c, db_config, _saved_user, year=_yr)
                             if _ok_st:
-                                _audit(f"Guardó PDF DSP {_c} {_w}")
-                                _save_results.append(
-                                    f"✅ **{_c} {_w}** — {_n_upd} drivers · "
-                                    f"{'✅' if _ok_wh else '⚠️'} WHC"
-                                )
+                                return _i, f"✅ **{_c} {_w}** — {_n_upd} drivers · {'✅' if _ok_wh else '⚠️'} WHC"
                             else:
-                                _save_results.append(
-                                    f"❌ **{_c} {_w}** — Scorecard no guardado: `{_err_st}`"
-                                )
+                                return _i, f"❌ **{_c} {_w}** — Scorecard no guardado: `{_err_st}`"
                         except Exception as _e:
-                            _save_results.append(f"❌ **{_c} {_w}** — Error: {_e}")
-                        _save_prog.progress((_i + 1) / len(_ok_parsed))
+                            return _i, f"❌ **{_c} {_w}** — Error: {_e}"
+
+                    _save_workers = min(_n_total, 5)
+                    _done_count   = 0
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=_save_workers) as _pool:
+                        _futs = {_pool.submit(_save_one_pdf, (_i, _p)): _i
+                                 for _i, _p in enumerate(_ok_parsed)}
+                        for _fut in concurrent.futures.as_completed(_futs):
+                            _idx, _msg = _fut.result()
+                            _save_results[_idx] = _msg
+                            if _msg.startswith("✅"):
+                                _m2 = _ok_parsed[_idx]['meta']
+                                _audit(f"Guardó PDF DSP {_m2['centro']} {_m2['semana']}")
+                            _done_count += 1
+                            _save_prog.progress(_done_count / _n_total,
+                                                text=f"Guardados {_done_count}/{_n_total}...")
 
                     _clear_all_caches()
                     st.session_state.pop('_dsp_pdf_key', None)
@@ -2092,7 +2102,7 @@ if tab_dsp:
                     df_latest_ss['label'] = df_latest_ss['score_f'].apply(lambda x: f"{x:.1f}")
                     _sort_ss = df_latest_ss['centro'].tolist()
                     _y_min_ss = max(0, float(df_latest_ss['score_f'].min()) - 10)
-                    _y_max_ss = min(105, float(df_latest_ss['score_f'].max()) + 15)
+                    _y_max_ss = min(110, float(df_latest_ss['score_f'].max()) + 20)
                     _cs_ss = alt.Scale(domain=['Fantastic', 'Great', 'Fair', 'Poor', '—'],
                                        range=['#0F6CBD', '#067D50', '#FF9900', '#CC0000', '#6c757d'])
                     _bar_ss = min(60, max(20, 400 // max(1, len(df_latest_ss))))
@@ -2115,7 +2125,7 @@ if tab_dsp:
                                      alt.Tooltip('semana:N', title='Semana')]
                         ).properties(height=300))
                     _text_ss = (alt.Chart(df_latest_ss)
-                        .mark_text(dy=-10, fontSize=13, fontWeight='bold', color='white')
+                        .mark_text(dy=-10, fontSize=13, fontWeight='bold', color='white', clip=False)
                         .encode(x=alt.X('centro:N', sort=_sort_ss),
                                 y=alt.Y('score_f:Q', scale=alt.Scale(domain=[_y_min_ss, _y_max_ss])),
                                 text=alt.Text('label:N')))

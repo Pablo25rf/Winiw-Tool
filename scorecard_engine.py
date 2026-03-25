@@ -34,6 +34,7 @@ try:
     import psycopg2
     from psycopg2 import sql
     from psycopg2 import pool as pg_pool
+    from psycopg2 import extras as pg_extras
     HAS_POSTGRES = True
 except ImportError:
     pass  # psycopg2 no instalado — modo SQLite activo
@@ -3028,11 +3029,12 @@ def _recalculate_scores_for_ids(cursor, ph: str, week: str, center: str,
         score_updates.append((calificacion, float(score_val), detalles,
                                week, center, year, did))
     if score_updates:
-        cursor.executemany(
-            f"UPDATE scorecards SET calificacion={ph}, score={ph}, detalles={ph} "
-            f"WHERE semana={ph} AND centro={ph} AND anio={ph} AND driver_id={ph}",
-            score_updates
-        )
+        _q_score = (f"UPDATE scorecards SET calificacion={ph}, score={ph}, detalles={ph} "
+                    f"WHERE semana={ph} AND centro={ph} AND anio={ph} AND driver_id={ph}")
+        if ph == '%s':
+            pg_extras.execute_batch(cursor, _q_score, score_updates, page_size=200)
+        else:
+            cursor.executemany(_q_score, score_updates)
     return len(score_updates)
 
 
@@ -3110,7 +3112,10 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
                         pdf_loaded         = 1
                     WHERE semana={ph} AND centro={ph} AND anio={ph} AND driver_id={ph}
                 """
-                cursor.executemany(q_update, update_vals)
+                if is_pg:
+                    pg_extras.execute_batch(cursor, q_update, update_vals, page_size=200)
+                else:
+                    cursor.executemany(q_update, update_vals)
                 updated = len(update_vals)
                 # Recalcular score: ahora dcr/pod/cc son reales (PDF) y dnr/rts son reales (CSV)
                 n_recalc = _recalculate_scores_for_ids(
@@ -3187,7 +3192,10 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
                         """
                     else:
                         q_ins = f"INSERT OR IGNORE INTO scorecards ({col_ins}) VALUES ({phs_ins})"
-                    cursor.executemany(q_ins, insert_vals)
+                    if is_pg:
+                        pg_extras.execute_batch(cursor, q_ins, insert_vals, page_size=200)
+                    else:
+                        cursor.executemany(q_ins, insert_vals)
                     logger.info(f"✓ update_drivers_from_pdf: {len(insert_vals)} nuevas filas insertadas desde PDF")
 
             conn.commit()
