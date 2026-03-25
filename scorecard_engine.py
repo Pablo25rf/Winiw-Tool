@@ -13,6 +13,7 @@ Fecha: Marzo 2026
 
 import pandas as pd
 import numpy as np
+import time as _time
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -3035,18 +3036,25 @@ def _recalculate_scores_for_ids(cursor, ph: str, week: str, center: str,
                                week, center, year, did))
     if score_updates:
         if ph == '%s':
-            # Single SQL statement — one round trip for all N score updates
-            su_pg = [(t[3], t[4], t[5], t[0], t[1], t[2], t[6]) for t in score_updates]
-            _q_score = """
+            # Single SQL statement — one round trip for all N score updates.
+            # week/center/year as SQL constants so PostgreSQL can use the index (semana,centro,anio,driver_id).
+            _w = str(week).replace("'", "''")
+            _c = str(center).replace("'", "''")
+            _y = int(year)
+            # su_pg: (calificacion, score, detalles, driver_id)
+            su_pg = [(t[0], t[1], t[2], t[6]) for t in score_updates]
+            _q_score = f"""
                 UPDATE scorecards AS s SET
                     calificacion = d.calificacion,
                     score        = d.score::double precision,
                     detalles     = d.detalles
-                FROM (VALUES %s) AS d(semana, centro, anio, calificacion, score, detalles, driver_id)
-                WHERE s.semana = d.semana AND s.centro = d.centro AND s.anio = d.anio::integer
+                FROM (VALUES %s) AS d(calificacion, score, detalles, driver_id)
+                WHERE s.semana = '{_w}' AND s.centro = '{_c}' AND s.anio = {_y}
                   AND s.driver_id = d.driver_id
             """
+            _t_sc = _time.perf_counter()
             pg_extras.execute_values(cursor, _q_score, su_pg)
+            logger.info(f"[timing] execute_values UPDATE scores: {_time.perf_counter()-_t_sc:.2f}s ({len(su_pg)} rows)")
         else:
             _q_score = ("UPDATE scorecards SET calificacion=?, score=?, detalles=? "
                         "WHERE semana=? AND centro=? AND anio=? AND driver_id=?")
@@ -3085,12 +3093,14 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
                 return 0, 0
 
             phs = ", ".join([ph] * len(all_ids))
+            _t_sel = _time.perf_counter()
             cursor.execute(
                 f"SELECT driver_id FROM scorecards "
                 f"WHERE semana={ph} AND centro={ph} AND anio={ph} AND driver_id IN ({phs})",
                 [week, center, year] + all_ids
             )
             existing_ids = {row[0] for row in cursor.fetchall()}
+            logger.info(f"[timing] SELECT existing_ids: {_time.perf_counter()-_t_sel:.2f}s")
 
             not_found = [did for did in all_ids if did not in existing_ids]
 
@@ -3112,12 +3122,17 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
 
             if update_vals:
                 if is_pg:
-                    # Single SQL statement — one round trip for all N drivers
+                    # Single SQL statement — one round trip for all N drivers.
+                    # week/center/year as SQL constants so PostgreSQL can use the index (semana,centro,anio,driver_id).
+                    _w = str(week).replace("'", "''")
+                    _c = str(center).replace("'", "''")
+                    _y = int(year)
                     # update_vals tuple: (ent, dcr, pod, cc, dsc, lor, ce, cdf, dcr, pod, cc, ent, ent, week, center, year, did)
                     # indices:            0    1    2    3    4    5    6    7    8    9   10   11   12   13    14     15    16
-                    uv_pg = [(t[13], t[14], t[15], t[0], t[1], t[2], t[3],
-                              t[4], t[5], t[6], t[7], t[16]) for t in update_vals]
-                    q_uv = """
+                    # uv_pg: (ent, dcr, pod, cc, dsc, lor, ce, cdf, driver_id) — 9 values only
+                    uv_pg = [(t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[16]) for t in update_vals]
+                    _t0 = _time.perf_counter()
+                    q_uv = f"""
                         UPDATE scorecards AS s SET
                             entregados_oficial = d.entregados_oficial::double precision,
                             dcr_oficial        = d.dcr_oficial::double precision,
@@ -3134,13 +3149,13 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
                                                      THEN d.entregados_oficial::double precision
                                                      ELSE s.entregados END,
                             pdf_loaded         = 1
-                        FROM (VALUES %s) AS d(semana, centro, anio,
-                                              entregados_oficial, dcr_oficial, pod_oficial, cc_oficial,
+                        FROM (VALUES %s) AS d(entregados_oficial, dcr_oficial, pod_oficial, cc_oficial,
                                               dsc_dpmo, lor_dpmo, ce_dpmo, cdf_dpmo_oficial, driver_id)
-                        WHERE s.semana = d.semana AND s.centro = d.centro AND s.anio = d.anio::integer
+                        WHERE s.semana = '{_w}' AND s.centro = '{_c}' AND s.anio = {_y}
                           AND s.driver_id = d.driver_id
                     """
                     pg_extras.execute_values(cursor, q_uv, uv_pg)
+                    logger.info(f"[timing] execute_values UPDATE drivers: {_time.perf_counter()-_t0:.2f}s ({len(uv_pg)} rows)")
                 else:
                     q_update = """
                         UPDATE scorecards SET
@@ -3237,7 +3252,9 @@ def update_drivers_from_pdf(drivers_df: pd.DataFrame, week: str, center: str,
                         cursor.executemany(q_ins, insert_vals)
                     logger.info(f"✓ update_drivers_from_pdf: {len(insert_vals)} nuevas filas insertadas desde PDF")
 
+            _t_commit = _time.perf_counter()
             conn.commit()
+            logger.info(f"[timing] commit: {_time.perf_counter()-_t_commit:.2f}s")
 
         if not_found:
             logger.warning(f"Drivers del PDF sin match en scorecards ({len(not_found)}): "
