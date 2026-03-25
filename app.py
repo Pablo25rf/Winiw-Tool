@@ -1580,7 +1580,12 @@ if tab_proc:
                             # Extraer ZIP
                             try:
                                 with zipfile.ZipFile(zip_file, 'r') as zf:
-                                    zf.extractall(tmpdir)
+                                    _root_path = pathlib.Path(tmpdir).resolve()
+                                    for _member in zf.infolist():
+                                        _dest = (_root_path / _member.filename).resolve()
+                                        if not str(_dest).startswith(str(_root_path)):
+                                            continue  # zip slip — ignorar
+                                        zf.extract(_member, tmpdir)
                             except zipfile.BadZipFile:
                                 st.error("❌ El archivo no es un ZIP válido.")
                                 st.stop()
@@ -2882,7 +2887,7 @@ with tab_excel:
 
     except Exception as e:
         st.error(f"❌ Error cargando el scorecard: {e}")
-        st.exception(e)
+        _log.exception("tab_excel error")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB: HISTÓRICO
@@ -3324,7 +3329,7 @@ if tab_admin:
 
                 rows_html.append(f"""
                 <tr style='background:{bg}'>
-                    <td style='padding:8px 12px;font-weight:600'>{row.username}{pwd_warn}</td>
+                    <td style='padding:8px 12px;font-weight:600'>{_h(str(row.username))}{pwd_warn}</td>
                     <td style='padding:8px 12px'>{role_badge.get(row.role, row.role)}</td>
                     <td style='padding:8px 12px'>{status}</td>
                     <td style='padding:8px 12px;text-align:center;color:{"#dc3545" if getattr(row,"attempt_count",0) and getattr(row,"attempt_count",0) > 0 else "#6c757d"}'>{int(row.attempt_count) if pd.notna(row.attempt_count) else 0}</td>
@@ -3683,7 +3688,7 @@ if tab_admin:
                         else "<span style='color:#6c757d;font-size:0.85em'>Sin restricción</span>"
                     )
                     rows_jt.append(
-                        f"<tr><td style='padding:8px 12px;font-weight:600'>{jr.username}</td>"
+                        f"<tr><td style='padding:8px 12px;font-weight:600'>{_h(str(jr.username))}</td>"
                         f"<td style='padding:8px 12px'>{badge_c}</td></tr>"
                     )
 
