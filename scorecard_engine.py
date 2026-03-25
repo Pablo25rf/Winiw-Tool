@@ -1195,7 +1195,7 @@ def create_professional_excel(df: pd.DataFrame, output_path: str,
                 cell = ws_detail.cell(row=idx, column=col_idx, value=float(row_data[col_name]))
                 cell.number_format = '0.0%'
             
-            cell_obs = ws_detail.cell(row=idx, column=15, value=str(row_data['DETALLES']))
+            cell_obs = ws_detail.cell(row=idx, column=15, value=str(row_data.get('DETALLES', '')))
             cell_obs.alignment = Alignment(horizontal='left', wrap_text=True, vertical='center')
             
             for col in range(1, 16): 
