@@ -158,9 +158,23 @@ def get_active_weeks(_db_config_key: str, db_config: dict, limit: int = MAX_SEMA
         return []
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def cached_allowed_weeks_jt(_db_config_key: str, db_config: dict) -> list:
     """Las 2 semanas que puede ver un JT — delega a get_active_weeks."""
     return get_active_weeks(_db_config_key, db_config, limit=SEMANAS_VISIBLES_JT)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def cached_centros(_db_config_key: str, db_config: dict) -> list:
+    """Lista de centros distintos — caché 10 min."""
+    try:
+        with scorecard.db_connection(db_config) as conn:
+            return pd.read_sql_query(
+                "SELECT DISTINCT centro FROM scorecards ORDER BY centro", conn
+            )['centro'].tolist()
+    except Exception as _e:
+        _log.warning(f"cached_centros error: {_e}")
+        return []
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -361,6 +375,24 @@ def cached_executive_summary(_db_config_key: str, db_config: dict) -> pd.DataFra
     except Exception as e:
         _log.warning(f"cached_executive_summary error: {e}")
         return pd.DataFrame()
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def cached_db_stats(_db_config_key: str, db_config: dict) -> dict:
+    """Estadísticas globales de la BD — caché 2 min."""
+    try:
+        with scorecard.db_connection(db_config) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM scorecards")
+            total = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(DISTINCT centro) FROM scorecards")
+            centros = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(DISTINCT semana) FROM scorecards")
+            semanas = cursor.fetchone()[0]
+        return {"total": total, "centros": centros, "semanas": semanas}
+    except Exception as _e:
+        _log.warning(f"cached_db_stats error: {_e}")
+        return {}
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -1639,8 +1671,8 @@ if tab_proc:
                                     prog.progress((i+1)/total_folders)
                                     continue
 
-                                # Obtener targets del centro
-                                t_bulk = scorecard.get_center_targets(center_f, db_config=db_config)
+                                # Obtener targets del centro (cacheado)
+                                t_bulk = cached_center_targets(_DB_KEY, db_config, center_f)
 
                                 df_bulk = scorecard.process_single_batch(
                                     batch_files['concessions'],
@@ -1717,7 +1749,14 @@ if tab_dsp:
             _pdf_key = f"_dsp_parsed_{','.join(f.name for f in uploaded_pdfs)}"
             if st.session_state.get('_dsp_pdf_key') != _pdf_key:
                 _prog = st.progress(0, text="Procesando PDFs...")
-                _pdf_bytes_list = [(f.name, f.read()) for f in uploaded_pdfs]
+                _MAX_PDF_MB = 50
+                _pdf_bytes_list = []
+                for _f in uploaded_pdfs:
+                    _data = _f.read()
+                    if len(_data) > _MAX_PDF_MB * 1024 * 1024:
+                        st.warning(f"⚠️ {_f.name} supera {_MAX_PDF_MB}MB y se ha omitido.")
+                    else:
+                        _pdf_bytes_list.append((_f.name, _data))
                 _total = len(_pdf_bytes_list)
 
                 def _parse_one(_item):
@@ -3144,6 +3183,7 @@ with tab_hist:
                                                fecha_semana, uploaded_by, timestamp
                                         FROM scorecards {where_sql}
                                         ORDER BY fecha_semana DESC, semana DESC, centro, score DESC
+                                        LIMIT 100000
                                     """
                                     with scorecard.db_connection(db_config) as conn_full:
                                         df_full = pd.read_sql_query(
@@ -3320,8 +3360,8 @@ if tab_admin:
                             status = "<span style='color:#dc3545'>🔒 Bloqueado</span>"
                         else:
                             status = "<span style='color:#198754'>✅ Activo</span>"
-                    except Exception:
-                        status = "<span style='color:#198754'>✅ Activo</span>"
+                    except (ValueError, TypeError):
+                        status = "<span style='color:#fd7e14'>⚠️ Revisar</span>"
                 else:
                     status = "<span style='color:#198754'>✅ Activo</span>"
 
@@ -3375,14 +3415,7 @@ if tab_admin:
                     st.caption("ℹ️ Los admins solo pueden crear JTs.")
 
                 # Centro asignado (solo visible si el rol es JT)
-                centros_disponibles = ["(Sin restricción)"]
-                try:
-                    with scorecard.db_connection(db_config) as conn_c:
-                        centros_disponibles += pd.read_sql_query(
-                            "SELECT DISTINCT centro FROM scorecards ORDER BY centro", conn_c
-                        )['centro'].tolist()
-                except Exception as _e:
-                    _log.debug(f"centros_disponibles: {_e}")
+                centros_disponibles = ["(Sin restricción)"] + cached_centros(_DB_KEY, db_config)
                 new_centro_asignado = st.selectbox(
                     "Centro asignado (solo JTs)", centros_disponibles,
                     help="Restringe al JT a ver solo este centro. 'Sin restricción' = ve todos.",
@@ -3669,14 +3702,7 @@ if tab_admin:
                 st.info("No hay usuarios JT activos.")
             else:
                 # Obtener centros disponibles
-                centros_asig = ["(Sin restricción)"]
-                try:
-                    with scorecard.db_connection(db_config) as conn_cen:
-                        centros_asig += pd.read_sql_query(
-                            "SELECT DISTINCT centro FROM scorecards ORDER BY centro", conn_cen
-                        )['centro'].tolist()
-                except Exception as _e:
-                    _log.debug(f"centros_asig: {_e}")
+                centros_asig = ["(Sin restricción)"] + cached_centros(_DB_KEY, db_config)
 
                 # Tabla de asignaciones actuales
                 rows_jt = []
@@ -3816,17 +3842,12 @@ if tab_admin:
 
         with col1:
             st.markdown("#### 📊 Estadísticas")
-            try:
-                with scorecard.db_connection(db_config) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT COUNT(*) FROM scorecards")
-                    st.metric("Total Registros", f"{cursor.fetchone()[0]:,}")
-                    cursor.execute("SELECT COUNT(DISTINCT centro) FROM scorecards")
-                    st.metric("Centros", cursor.fetchone()[0])
-                    cursor.execute("SELECT COUNT(DISTINCT semana) FROM scorecards")
-                    st.metric("Semanas almacenadas", cursor.fetchone()[0])
-            except Exception as _e:
-                _log.warning(f"stats BD error: {_e}")
+            _stats = cached_db_stats(_DB_KEY, db_config)
+            if _stats:
+                st.metric("Total Registros", f"{_stats['total']:,}")
+                st.metric("Centros", _stats['centros'])
+                st.metric("Semanas almacenadas", _stats['semanas'])
+            else:
                 st.warning("BD vacía")
 
         with col2:
@@ -3944,18 +3965,11 @@ if tab_admin:
         st.subheader("🎯 Configuración de Targets por Centro")
         st.caption("Define los umbrales de calidad para cada centro. Afecta al cálculo de scores.")
 
-        try:
-            with scorecard.db_connection(db_config) as conn:
-                centros_bd = pd.read_sql_query(
-                    "SELECT DISTINCT centro FROM scorecards ORDER BY centro", conn
-                )['centro'].tolist()
-        except Exception as _e:
-            _log.warning(f"centros_bd error: {_e}")
-            centros_bd = []
+        centros_bd = cached_centros(_DB_KEY, db_config)
 
         if centros_bd:
             sel_target_center = st.selectbox("Centro a configurar", centros_bd, key="target_center")
-            curr = scorecard.get_center_targets(sel_target_center, db_config=db_config)
+            curr = cached_center_targets(_DB_KEY, db_config, sel_target_center)
 
             tc1, tc2, tc3, tc4 = st.columns(4)
             new_dnr  = tc1.number_input("DNR Max",     value=float(curr['target_dnr']),

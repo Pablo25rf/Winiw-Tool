@@ -13,7 +13,6 @@ scorecard_backup.db
 # ── Variables de entorno y secrets (NUNCA al repo) ───────────────────────────
 .env
 .streamlit/secrets.toml
-.streamlit/
 
 # ── Logs ─────────────────────────────────────────────────────────────────────
 logs/

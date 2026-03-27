@@ -2214,8 +2214,13 @@ def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Option
                                             THEN EXCLUDED.driver_name
                                             ELSE scorecards.driver_name
                                           END,
-                        calificacion    = EXCLUDED.calificacion,
-                        score           = EXCLUDED.score,
+                        calificacion    = CASE WHEN EXCLUDED.calificacion IS NOT NULL
+                                                    AND EXCLUDED.calificacion != ''
+                                               THEN EXCLUDED.calificacion
+                                               ELSE scorecards.calificacion END,
+                        score           = CASE WHEN EXCLUDED.score > 0
+                                               THEN EXCLUDED.score
+                                               ELSE scorecards.score END,
                         entregados      = CASE WHEN EXCLUDED.entregados > 0
                                                THEN EXCLUDED.entregados
                                                ELSE scorecards.entregados END,
@@ -2236,7 +2241,10 @@ def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Option
                         cdf             = CASE WHEN scorecards.pdf_loaded = 1
                                                THEN scorecards.cdf
                                                ELSE EXCLUDED.cdf END,
-                        detalles        = EXCLUDED.detalles,
+                        detalles        = CASE WHEN EXCLUDED.detalles IS NOT NULL
+                                                    AND EXCLUDED.detalles != ''
+                                               THEN EXCLUDED.detalles
+                                               ELSE scorecards.detalles END,
                         uploaded_by     = EXCLUDED.uploaded_by,
                         timestamp       = EXCLUDED.timestamp
                 """
@@ -2255,8 +2263,13 @@ def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Option
                                             THEN excluded.driver_name
                                             ELSE driver_name
                                           END,
-                        calificacion    = excluded.calificacion,
-                        score           = excluded.score,
+                        calificacion    = CASE WHEN excluded.calificacion IS NOT NULL
+                                                    AND excluded.calificacion != ''
+                                               THEN excluded.calificacion
+                                               ELSE calificacion END,
+                        score           = CASE WHEN excluded.score > 0
+                                               THEN excluded.score
+                                               ELSE score END,
                         entregados      = CASE WHEN excluded.entregados > 0
                                                THEN excluded.entregados
                                                ELSE entregados END,
@@ -2269,7 +2282,10 @@ def save_to_database(df: pd.DataFrame, week: str, center: str, db_config: Option
                         fdps            = excluded.fdps,
                         rts             = excluded.rts,
                         cdf             = CASE WHEN pdf_loaded = 1 THEN cdf ELSE excluded.cdf END,
-                        detalles        = excluded.detalles,
+                        detalles        = CASE WHEN excluded.detalles IS NOT NULL
+                                                    AND excluded.detalles != ''
+                                               THEN excluded.detalles
+                                               ELSE detalles END,
                         uploaded_by     = excluded.uploaded_by,
                         timestamp       = excluded.timestamp
                 """
